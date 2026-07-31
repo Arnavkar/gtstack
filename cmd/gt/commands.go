@@ -166,13 +166,20 @@ func cmdModify(args []string) error {
 }
 
 // cmdSubmit maps onto `gh stack submit`, which always covers the whole stack.
-// With -n it passes --auto, which drafts new PRs. That is deliberate: --open
-// would also publish PRs that are already drafts.
+//
+// gh stack opens its editor whenever it has a terminal, but Graphite's submit
+// does not, so gt passes --auto by default and keeps -e for the times the
+// editor is wanted. --auto creates new PRs as drafts, matching what -n did
+// before; -p adds --open, which also publishes PRs that were already drafts, so
+// it is never implied.
 func cmdSubmit(args []string) error {
 	fs := newFlags("submit")
-	draft := fs.BoolP("draft", "d", false, "create new PRs as drafts")
+	// -d and -n now describe the default. They stay so that the flags people
+	// already type keep working.
+	draft := fs.BoolP("draft", "d", false, "create new PRs as drafts (the default)")
 	publish := fs.BoolP("publish", "p", false, "mark PRs ready for review")
-	noEdit := fs.BoolP("no-edit", "n", false, "skip the PR metadata editor")
+	noEdit := fs.BoolP("no-edit", "n", false, "skip the PR metadata editor (the default)")
+	edit := fs.BoolP("edit", "e", false, "open the gh stack submit editor")
 	stack := fs.Bool("stack", false, "submit the whole stack (always on with gh stack)")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -180,23 +187,31 @@ func cmdSubmit(args []string) error {
 	if *draft && *publish {
 		return fmt.Errorf("--draft and --publish conflict")
 	}
+	if *edit && *noEdit {
+		return fmt.Errorf("--edit and --no-edit conflict")
+	}
 	if !*stack {
 		fmt.Fprintln(os.Stderr,
 			"gt: note — gh stack submit covers the whole stack, not just the current branch and below.\n"+
-				"    Deselect branches in the editor, or pass -n to skip it.")
+				"    Pass -e to pick branches in the editor.")
 	}
-
-	gh := []string{"stack", "submit"}
-	if *noEdit {
-		gh = append(gh, "--auto")
-	}
-	if *publish {
-		gh = append(gh, "--open")
-	}
-	if *draft && !*noEdit {
+	if *draft && *edit {
 		fmt.Fprintln(os.Stderr, "gt: note — set draft with the CREATE AS toggle in the submit editor.")
 	}
-	return run("gh", gh...)
+	return run("gh", submitArgs(*edit, *publish)...)
+}
+
+// submitArgs builds the `gh stack submit` invocation. It is split out so the
+// default -- skipping the editor -- is covered by a test.
+func submitArgs(edit, publish bool) []string {
+	gh := []string{"stack", "submit"}
+	if !edit {
+		gh = append(gh, "--auto")
+	}
+	if publish {
+		gh = append(gh, "--open")
+	}
+	return gh
 }
 
 func cmdSync(args []string) error {

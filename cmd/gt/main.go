@@ -28,8 +28,8 @@ type command struct {
 var commands = []command{
 	{[]string{"create", "c"}, "gh stack init | gh stack add", cmdCreate},
 	{[]string{"modify", "m"}, "git commit + gh stack rebase --upstack --no-trunk", cmdModify},
-	{[]string{"submit", "s"}, "gh stack submit", cmdSubmit},
-	{[]string{"ss"}, "gh stack submit (whole stack)", func(a []string) error {
+	{[]string{"submit", "s"}, "gh stack submit --auto", cmdSubmit},
+	{[]string{"ss"}, "gh stack submit --auto (whole stack)", func(a []string) error {
 		return cmdSubmit(append([]string{"--stack"}, a...))
 	}},
 	{[]string{"sync"}, "gh stack sync", cmdSync},
