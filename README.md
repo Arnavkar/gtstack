@@ -30,7 +30,14 @@ Install the extension:
 gh extension install github/gh-stack
 ```
 
-Build and put `gt` on your `PATH`:
+Install `gt` with Homebrew (macOS). The fully qualified name taps
+`hSATAC/toybox` for you:
+
+```sh
+brew install hSATAC/toybox/gtstack
+```
+
+Or build from source and put `gt` on your `PATH`:
 
 ```sh
 git clone https://github.com/hSATAC/gtstack.git
@@ -39,6 +46,8 @@ mkdir -p bin
 go build -o bin/gt .
 export PATH="$PWD/bin:$PATH"
 ```
+
+Linux builds are attached to each [release][releases] as `tar.gz` archives.
 
 `gtstack` deliberately uses the same binary name as Graphite. If Graphite is
 still installed, use `type -a gt` to see which binary your shell will run.
@@ -202,3 +211,4 @@ silently corrupt a stack.
 
 [gh-cli]: https://cli.github.com/
 [gh-stack]: https://github.com/github/gh-stack
+[releases]: https://github.com/hSATAC/gtstack/releases
