@@ -43,7 +43,7 @@ Or build from source and put `gt` on your `PATH`:
 git clone https://github.com/hSATAC/gtstack.git
 cd gtstack
 mkdir -p bin
-go build -o bin/gt .
+go build -o bin/gt ./cmd/gt
 export PATH="$PWD/bin:$PATH"
 ```
 

@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: gt
-    main: .
+    main: ./cmd/gt
     binary: gt
     env:
       - CGO_ENABLED=0
