@@ -37,6 +37,12 @@ Install `gt` with Homebrew (macOS). The fully qualified name taps
 brew install hSATAC/toybox/gtstack
 ```
 
+Or install it with Go:
+
+```sh
+go install github.com/hSATAC/gtstack/cmd/gt@latest
+```
+
 Or build from source and put `gt` on your `PATH`:
 
 ```sh
@@ -114,7 +120,9 @@ blindly forwarding the command.
 | `gt log` / `gt ls` / `gt ll` | `gh stack view`, `gh stack view --short`, or `git log --graph` |
 | `gt up`, `down`, `top`, `bottom`, `trunk` | The corresponding `gh stack` navigation command |
 | `gt merge` | `gh stack merge` |
+| `gt switch` | `gh stack switch` |
 | `gt pr` | `gh pr view --web` |
+| `gt init` | Nothing. Explains that `gh stack` has no repository-level init |
 
 Run `gt <command> --help` for the supported flags. Unknown flags are rejected
 rather than silently dropped.
@@ -180,24 +188,51 @@ Color is disabled when stderr is not a terminal or when `NO_COLOR` is set.
 ## Unsupported Graphite commands
 
 `gtstack` is a workflow bridge, not a complete reimplementation of Graphite.
-Commands without a safe native equivalent fail with the reason and the nearest
-`git` or `gh stack` alternative.
+Each command below stops with the reason and the nearest `git` or `gh stack`
+alternative; run it to see the advice for that command.
 
-The following operations are available only through the interactive
-`gh stack modify` TUI:
+None of these are merely unfinished. They are grouped by what blocks the
+translation.
+
+### Available only in the `gh stack modify` TUI
 
 ```text
 fold  move  reorder  rename  delete
 ```
 
-The following Graphite commands are not currently translated:
+`gh stack` can perform these, but only inside an interactive editor. No flag
+drives them, so there is nothing for a one-line `gt` command to call.
+
+### `gh stack` has no equivalent
 
 ```text
-absorb      aliases     auth       changelog   children    config
-dash        demo        docs       feedback    freeze      guide
-info        parent      pop        revert      split       squash
-track       undo        unfreeze   unlink      untrack
+absorb  split  squash  pop  revert  undo  freeze  unfreeze
 ```
+
+The operation does not exist in the `gh stack` model. Most of them name a Git
+recipe instead — `gt squash` points at `git reset --soft <parent>`, for example.
+`freeze` and `unfreeze` have no counterpart at all.
+
+### The scope does not match
+
+```text
+track  untrack  unlink
+```
+
+Graphite tracks and untracks one branch. `gh stack` works a whole stack at a
+time: `gh stack init` adopts a list of branches into a new stack, and
+`gh stack unstack` drops an entire stack. Translating between them would
+silently widen what you asked for, so `gt` refuses instead.
+
+### Not a stack operation
+
+```text
+aliases   auth      changelog  children  config  dash
+demo      docs      feedback   guide     info    parent
+```
+
+`gh` itself, GitHub, or nothing at all handles these. `gt` has no configuration
+of its own, so `gt config` points at `gh`.
 
 ## Extension and state compatibility
 
