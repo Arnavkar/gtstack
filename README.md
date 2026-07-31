@@ -1,151 +1,204 @@
-# gt — Graphite command names on top of `gh stack`
+# gtstack
 
-A small wrapper that accepts the Graphite CLI commands you already type and runs
-`gh stack` (and plain git) underneath.
+> Graphite muscle memory, backed by GitHub's native stacks.
 
-It supports **linear stacks only**. Where `gh stack` cannot represent what
-Graphite would do, `gt` stops with an error naming the native command to run
-instead. It never guesses.
+`gtstack` installs a `gt` command that translates the Graphite CLI commands
+you already know into [GitHub's official `gh stack`][gh-stack] commands and
+plain Git operations.
 
-## Requirements
+It is intentionally a thin compatibility shim. `gh stack` remains the source
+of truth for stack state; `gtstack` has no backend, metadata format, or config
+of its own.
 
-- `gh`, and the `github/gh-stack` extension. `gt` detects a missing extension
-  and offers to install it — see below.
-- Built against `gh-stack` **v0.1.0**, state schema **v1**. `gt` reads
-  `.git/gh-stack` to decide between `gh stack init` and `gh stack add`, and
-  refuses to run if the schema version changes.
-- Go 1.23 to build.
+> [!IMPORTANT]
+> `gtstack` is early software. It currently supports **linear stacks only** and
+> targets `gh-stack` **v0.1.0**, state schema **v1**. When an operation cannot
+> be translated safely, it stops with an actionable error instead of guessing.
 
-## Missing extension
+## Quick start
 
-`gt` is a shim for `gh stack`, so it checks that the extension is there and
-asks before installing it:
+### Requirements
 
-```
-gt: the gh stack extension is not installed. Install it now? [Y/n]
-```
+- Git
+- [GitHub CLI (`gh`)][gh-cli], authenticated with GitHub
+- The [`github/gh-stack`][gh-stack] extension
+- Go 1.23 or newer to build from source
 
-Answer yes and it runs `gh extension install github/gh-stack`, then retries the
-command you typed. Undo with `gh extension remove github/gh-stack`.
-
-The check costs nothing on the happy path. It runs only when a `gh stack` call
-fails, or when a repository has no stack state yet — otherwise `gt` would report
-every branch as untracked when the real problem is a missing extension.
-
-Without a terminal on stdin there is nobody to ask, so `gt` declines and prints
-the install command instead of installing unattended.
-
-## Build
+Install the extension:
 
 ```sh
+gh extension install github/gh-stack
+```
+
+Build and put `gt` on your `PATH`:
+
+```sh
+git clone https://github.com/hSATAC/gtstack.git
+cd gtstack
+mkdir -p bin
 go build -o bin/gt .
+export PATH="$PWD/bin:$PATH"
 ```
 
-## Install
+`gtstack` deliberately uses the same binary name as Graphite. If Graphite is
+still installed, use `type -a gt` to see which binary your shell will run.
+You can distinguish them with:
 
-This binary is called `gt` on purpose, so it takes over the name the Graphite
-CLI uses. Put it ahead of Homebrew in `PATH`:
+```console
+$ gt --version
+gt 0.1.0 (gh-stack shim)
+```
+
+### Use it like Graphite
 
 ```sh
-export PATH="/Users/cat/projects/graphite-gh-stack/bin:$PATH"
+# Start a stack and commit the first layer
+gt create -am "Add the API client"
+
+# Add another layer
+gt create -am "Use the API client"
+
+# Inspect the stack
+gt log
+
+# Create or update the native GitHub stack
+gt submit --stack
 ```
 
-Check which one you get with `which gt`. `gt --version` reports
-`gt 0.1.0 (gh-stack shim)`; the real Graphite CLI reports a bare version number.
-The Graphite CLI stays installed and reachable at `/opt/homebrew/bin/gt`.
+Each `gt` invocation operates on the same stack state as `gh stack`, so you can
+mix the two CLIs whenever you need a native command:
 
-## Every command is echoed
-
-Before each step runs, `gt` prints it to stderr in cyan:
-
-```
-$ git add -A
-$ gh stack add feat-b
-$ git commit -m 'Add the login form'
+```sh
+gt log
+gh stack modify
+gt submit --stack
 ```
 
-So you can see the native command, learn it, and copy it. Steps are echoed one
-at a time immediately before they run, not as a plan up front, because some of
-them are conditional — a plan could name a command that never runs.
+## Why not just alias `gh stack` to `gt`?
 
-Output goes to stderr, so `gt log --json | jq` still works. Color turns off when
-stderr is not a terminal, or when `NO_COLOR` is set.
+`gh stack alias gt` only forwards arguments unchanged, but the two CLIs do not
+have the same command surface. Some commands have different names:
+
+```text
+gt create   �� gh stack add
+gt log      �� gh stack view
+gt restack  �� gh stack rebase
+```
+
+Others have actively conflicting meanings. Graphite's `gt modify` amends the
+current branch and restacks its descendants, while `gh stack modify` opens a
+TUI for restructuring the stack. `gtstack` translates the intent instead of
+blindly forwarding the command.
 
 ## Command mapping
 
-| Graphite | runs |
+| Graphite command | What `gtstack` runs |
 | --- | --- |
-| `gt create` / `gt c` | `gh stack init` (new stack) or `gh stack add` (on top of one) |
-| `gt modify` / `gt m` | `git commit [--amend]` + `gh stack rebase --upstack --no-trunk` |
+| `gt create` / `gt c` | `gh stack init` for a new stack, or `gh stack add` at the top of an existing stack |
+| `gt modify` / `gt m` | `git commit [--amend]`, then `gh stack rebase --upstack --no-trunk` |
 | `gt submit` / `gt s` / `gt ss` | `gh stack submit` |
-| `gt sync` | `gh stack sync` (`-d` → `--prune`) |
-| `gt restack` | `gh stack rebase` (`-d`/`-u` → `--downstack`/`--upstack`) |
-| `gt continue` / `gt abort` | `gh stack rebase` or `gh stack modify`, whichever is paused |
-| `gt checkout` / `gt co` | `gh stack checkout`, `gh stack switch`, or `git checkout` |
+| `gt sync` | `gh stack sync` (`-d` maps to `--prune`) |
+| `gt restack` | `gh stack rebase` (`-d`/`-u` map to `--downstack`/`--upstack`) |
+| `gt continue` / `gt abort` | Continue or abort the paused `gh stack rebase` or `gh stack modify` |
+| `gt checkout` / `gt co` | `gh stack checkout`, `gh stack switch`, or `git checkout`, depending on the target |
 | `gt get <pr>` | `gh stack checkout <pr>` |
-| `gt log` / `gt ls` / `gt ll` | `gh stack view` / `--short` / `git log --graph` |
-| `gt up` `down` `top` `bottom` `trunk` | the same `gh stack` subcommand |
+| `gt log` / `gt ls` / `gt ll` | `gh stack view`, `gh stack view --short`, or `git log --graph` |
+| `gt up`, `down`, `top`, `bottom`, `trunk` | The corresponding `gh stack` navigation command |
 | `gt merge` | `gh stack merge` |
 | `gt pr` | `gh pr view --web` |
 
-Flags not listed are rejected rather than silently dropped.
+Run `gt <command> --help` for the supported flags. Unknown flags are rejected
+rather than silently dropped.
 
-## Behaviour differences worth knowing
+## Important differences from Graphite
 
-**`gt create` cannot fork.** `gh stack add` only appends to the top of a stack.
-Running `gt create` from the middle of one would fork it, so `gt` errors and
-tells you to run `gt top` first.
+### Linear stacks only
 
-**`gt create` drives the commit itself.** It stages, asks `gh stack` to create
-just the branch, then commits. `gh stack add -m` is not used: on a parent that
-has no commits yet, it puts the commit on the parent instead of creating the new
-branch.
+`gh stack` represents a stack as a flat ordered list. `gtstack` therefore does
+not support forks:
 
-**`gt modify` is not a forward.** `gh stack` has no amend command, so `gt`
-amends with git and then asks `gh stack` to cascade the rebase. If the branch
-carries no commits of its own it creates a new commit instead of amending, so
-the parent's commit is never rewritten.
+- `gt create` must run from the top of the current stack.
+- If a branch belongs to more than one stack, `gtstack` stops and asks you to
+  use `gh stack` directly.
 
-**`gt submit` always submits the whole stack.** Graphite submits the current
-branch and everything below it; `gh stack submit` covers the whole stack. `gt`
-prints a note. Deselect branches in the submit editor, or pass `-n`.
+### `gt submit` covers the whole stack
 
-**`gt submit -n` creates drafts.** It maps to `gh stack submit --auto`, which
-drafts new PRs. This is intended. `gt` does not add `--open` to match Graphite's
-ready-for-review default, because `--open` would also publish PRs that are
-already drafts. Pass `-p` when you want them open.
+Graphite's `gt submit` submits the current branch and its downstack branches.
+`gh stack submit` covers the entire stack, so `gtstack` does too. Use the
+submit editor to deselect branches, or pass `-n` to skip the editor.
 
-**`gt co` with no argument lists only the current stack.** Graphite lists every
-tracked branch. `gh stack switch` is stack-scoped and there is no wider picker.
+`gt submit -n` maps to `gh stack submit --auto`, which creates new PRs as
+drafts. Pass `-p` when you want them ready for review.
 
-**`gt co <branch>` routes around `gh stack checkout`** when the branch is the
-trunk or is not tracked in a stack, because `gh stack checkout` reads a bare
-name as a stack number first and would land you somewhere else.
+### `gt modify` is implemented with Git
 
-## Not supported
+`gh stack` has no equivalent of Graphite's amend operation. `gtstack` commits
+or amends with Git, then asks `gh stack` to rebase the upstack branches. If the
+current branch has no commits of its own, it creates a commit rather than
+rewriting its parent's commit.
 
-These have no `gh stack` equivalent. `gt` names the reason and the nearest
-native command:
+### Checkout is stack-scoped
 
-`absorb`, `fold`, `move`, `reorder`, `rename`, `delete`, `split`, `squash`,
-`pop`, `revert`, `undo`, `freeze`, `unfreeze`, `track`, `untrack`, `unlink`,
-`info`, `children`, `parent`, `dash`, `auth`, `config`, `aliases`.
+`gt co` without an argument opens `gh stack switch`, which lists branches in
+the current stack rather than every tracked branch. Trunk and untracked local
+branches are checked out directly with Git.
 
-`fold`, `move`, `reorder`, `rename` and `delete` exist in `gh stack` only inside
-the interactive `gh stack modify` TUI, which a non-interactive command cannot
-drive.
+## Transparent by default
 
-## Forked stacks
+Before running each native operation, `gtstack` prints the exact command to
+stderr:
 
-`gh stack` stores each stack as a flat ordered list with no parent pointers, so
-one branch cannot have two children inside a stack. A fork can be expressed as a
-second stack whose trunk is a mid-stack branch, but then every `gh stack`
-command on the fork point needs an interactive prompt to pick a stack, and
-`gh stack rebase` only picks up the new parent after it has been pushed.
-
-`gt` detects that case and stops:
-
+```console
+$ git add -A
+$ gh stack add 07-31-add_the_login_form
+$ git commit -m 'Add the login form'
 ```
-gt: branch "feat-a" belongs to more than one stack; gt only supports linear stacks.
-    Run the gh stack command directly and pick a stack interactively.
+
+This keeps stdout clean for pipelines such as:
+
+```sh
+gt log --json | jq
 ```
+
+Color is disabled when stderr is not a terminal or when `NO_COLOR` is set.
+
+## Unsupported Graphite commands
+
+`gtstack` is a workflow bridge, not a complete reimplementation of Graphite.
+Commands without a safe native equivalent fail with the reason and the nearest
+`git` or `gh stack` alternative.
+
+The following operations are available only through the interactive
+`gh stack modify` TUI:
+
+```text
+fold  move  reorder  rename  delete
+```
+
+The following Graphite commands are not currently translated:
+
+```text
+absorb      aliases     auth       changelog   children    config
+dash        demo        docs       feedback    freeze      guide
+info        parent      pop        revert      split       squash
+track       undo        unfreeze   unlink      untrack
+```
+
+## Extension and state compatibility
+
+If `github/gh-stack` is missing, `gtstack` offers to install it interactively:
+
+```text
+gt: the gh stack extension is not installed. Install it now? [Y/n]
+```
+
+In a non-interactive environment it never installs software automatically; it
+prints the installation command and exits instead.
+
+To decide whether `gt create` should initialize or extend a stack, `gtstack`
+reads the state written by `gh stack` at `.git/gh-stack`. It refuses to run
+against an unknown schema version so that a future `gh-stack` update cannot
+silently corrupt a stack.
+
+[gh-cli]: https://cli.github.com/
+[gh-stack]: https://github.com/github/gh-stack
