@@ -80,9 +80,9 @@ gt submit --stack
 have the same command surface. Some commands have different names:
 
 ```text
-gt create   �� gh stack add
-gt log      �� gh stack view
-gt restack  �� gh stack rebase
+gt create   → gh stack add
+gt log      → gh stack view
+gt restack  → gh stack rebase
 ```
 
 Others have actively conflicting meanings. Graphite's `gt modify` amends the
