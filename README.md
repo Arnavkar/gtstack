@@ -105,7 +105,7 @@ blindly forwarding the command.
 | --- | --- |
 | `gt create` / `gt c` | `gh stack init` for a new stack, or `gh stack add` at the top of an existing stack |
 | `gt modify` / `gt m` | `git commit [--amend]`, then `gh stack rebase --upstack --no-trunk` |
-| `gt submit` / `gt s` / `gt ss` | `gh stack submit` |
+| `gt submit` / `gt s` / `gt ss` | `gh stack submit --auto` (`-e` opens the editor) |
 | `gt sync` | `gh stack sync` (`-d` maps to `--prune`) |
 | `gt restack` | `gh stack rebase` (`-d`/`-u` map to `--downstack`/`--upstack`) |
 | `gt continue` / `gt abort` | Continue or abort the paused `gh stack rebase` or `gh stack modify` |
@@ -133,11 +133,17 @@ not support forks:
 ### `gt submit` covers the whole stack
 
 Graphite's `gt submit` submits the current branch and its downstack branches.
-`gh stack submit` covers the entire stack, so `gtstack` does too. Use the
-submit editor to deselect branches, or pass `-n` to skip the editor.
+`gh stack submit` covers the entire stack, so `gtstack` does too. Pass `-e` to
+open the submit editor and deselect branches.
 
-`gt submit -n` maps to `gh stack submit --auto`, which creates new PRs as
-drafts. Pass `-p` when you want them ready for review.
+`gh stack submit` opens that editor whenever it has a terminal. Graphite's
+submit does not, so `gt submit` passes `--auto` and skips it. New PRs are
+created as drafts; pass `-p` to mark them ready for review.
+
+> [!NOTE]
+> `-p` maps to `--open`, which marks **new and existing** PRs ready for review.
+> It will publish a PR you had deliberately left as a draft, so `gt submit`
+> never passes it for you.
 
 ### `gt modify` is implemented with Git
 
