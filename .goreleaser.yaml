@@ -34,6 +34,10 @@ archives:
 checksum:
   name_template: checksums.txt
 
+release:
+  # Without this, a -rc tag is published as the Latest release.
+  prerelease: auto
+
 # A cask, not a formula: `brews` is deprecated since GoReleaser v2.10, because
 # formulas were never a good fit for shipping pre-built binaries. Casks are
 # macOS only, so Linux users install from the release archives.
