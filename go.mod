@@ -1,4 +1,4 @@
-module gtstack
+module github.com/hSATAC/gtstack
 
 go 1.23
 
