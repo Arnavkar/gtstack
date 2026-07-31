@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  # Pushing a tag by hand still works.
+  push:
+    tags:
+      - "v*"
+  # ...but the usual path is running this workflow and typing the version.
+  # Tagging lives in this workflow rather than a separate one on purpose: a tag
+  # pushed with the default GITHUB_TOKEN does not start another workflow run, so
+  # a "tag" workflow feeding this one would silently never release.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, with the leading v (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # GoReleaser builds the changelog from tags, so it needs full history.
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Before the tag, not after: deleting a published tag is far more work
+      # than re-running a job that stopped short of creating one.
+      - name: Test
+        run: go test ./...
+
+      - name: Create and push tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::version must look like v1.2.3 or v1.2.3-rc.1, got '$VERSION'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::error::tag $VERSION already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The default GITHUB_TOKEN is scoped to this repository, so it cannot
+          # push the cask to the tap. That needs a PAT with contents:write on
+          # hSATAC/homebrew-toybox.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -14,7 +14,9 @@ import (
 	"slices"
 )
 
-const version = "0.1.0"
+// version is replaced at release time by -X main.version. It must stay a var:
+// the linker silently ignores -X on a constant.
+var version = "0.1.0"
 
 type command struct {
 	names []string

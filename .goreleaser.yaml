@@ -1,0 +1,70 @@
+version: 2
+
+project_name: gtstack
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gt
+    main: .
+    binary: gt
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # main.version has to stay a var: the linker cannot patch a constant, and
+    # -X fails silently, which would ship every release reporting 0.1.0.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: gt
+    ids:
+      - gt
+    formats:
+      - tar.gz
+    name_template: "gt_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+# A cask, not a formula: `brews` is deprecated since GoReleaser v2.10, because
+# formulas were never a good fit for shipping pre-built binaries. Casks are
+# macOS only, so Linux users install from the release archives.
+homebrew_casks:
+  - name: gtstack
+    ids:
+      - gt
+    binaries:
+      - gt
+    homepage: https://github.com/hSATAC/gtstack
+    description: Graphite command names on top of gh stack
+    license: MIT
+    # withgraphite/tap/graphite installs its own bin/gt, so the two cannot both
+    # own that symlink. A cask can no longer declare `conflicts: formula:`
+    # (Homebrew removed it), so the collision is only explained, not enforced.
+    caveats: |
+      gt deliberately shares its name with the Graphite CLI.
+      If withgraphite/tap/graphite is installed, this cask cannot create its
+      own bin/gt. Run `brew uninstall graphite` first, and use `type -a gt`
+      to check which binary your shell resolves.
+    repository:
+      owner: hSATAC
+      name: homebrew-toybox
+      # The tap predates main-as-default and still uses master.
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # The binaries are unsigned, so Gatekeeper quarantines them and the first
+    # run dies with "cannot be opened". Strip the attribute at install time.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gt"]
+          end
