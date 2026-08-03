@@ -1,0 +1,43 @@
+Check out a stack by stack number, pull request number, PR URL, or branch name.
+
+A bare number is interpreted first as a stack number (the identifier shown in
+the GitHub stack UI). If no stack has that number, it is then tried as a
+locally tracked PR number, then a PR number whose stack is discovered from
+GitHub, and finally a branch name.
+
+When a PR number or PR URL is provided (e.g. 123 or
+https://github.com/owner/repo/pull/123), the command first checks
+local tracking. If the PR is not tracked locally, it queries the
+GitHub API to discover the stack, fetches the branches, and sets up
+the stack locally. If the stack already exists locally and matches,
+it simply switches to the branch.
+
+When a branch name is provided, the command resolves it against
+locally tracked stacks only.
+
+When run without arguments, opens an interactive picker listing every
+stack available to you — both the stacks tracked locally and the stacks
+that exist only on GitHub — so you can search, filter, and check one out.
+Fully merged stacks are omitted.
+
+Usage:
+  gh stack checkout [<stack-number> | <pr-number> | <pr-url> | <branch>] [flags]
+
+Examples:
+  # Check out a stack by its stack number
+  $ gh stack checkout 7
+
+  # Check out a stack by PR number
+  $ gh stack checkout 42
+
+  # Check out a stack by PR URL
+  $ gh stack checkout https://github.com/owner/repo/pull/42
+
+  # Check out a stack by branch name
+  $ gh stack checkout feat/api-routes
+
+  # Open the interactive picker of all available stacks (local and remote)
+  $ gh stack checkout
+
+Flags:
+  -h, --help   help for checkout

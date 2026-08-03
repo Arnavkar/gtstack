@@ -1,0 +1,12 @@
+Check out the top branch of the stack (furthest from the trunk).
+Merged branches are automatically skipped.
+
+Usage:
+  gh stack top [flags]
+
+Examples:
+  # Jump to the top of the stack
+  $ gh stack top
+
+Flags:
+  -h, --help   help for top

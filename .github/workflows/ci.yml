@@ -34,3 +34,29 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+  # Kept apart from `test` so the fast checks still report on their own when
+  # installing the extension fails.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Pinned to the release gtstack targets, so this job answers one
+      # question: does this change break gt? Whether a newer gh-stack breaks
+      # gt is what the daily gh-stack-compat workflow is for.
+      - name: Install the gh stack extension
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install github/gh-stack --pin v0.1.0 --force
+          gh stack --version
+
+      - name: go vet
+        run: go vet -tags=integration ./...
+
+      - name: go test -tags=integration
+        run: go test -tags=integration -timeout 15m ./test/integration/

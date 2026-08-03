@@ -1,2 +1,6 @@
 bin/
 dist/
+
+# `go build ./...` drops the binary here. Anchored: a bare `gt` would match
+# the cmd/gt source directory too.
+/gt
