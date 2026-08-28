@@ -283,9 +283,9 @@ func cmdCheckout(args []string) error {
 	return checkoutTarget(fs.Arg(0))
 }
 
-// checkoutInteractive is Graphite's bare `gt checkout`: a tree of local
-// stacks. `gh stack switch` only lists the current stack; `gh stack checkout`
-// with no args lists stacks (including GitHub-only ones), not branches.
+// checkoutInteractive is Graphite's bare `gt checkout`: a bottom-up tree of
+// local stacks. `gh stack switch` only lists the current stack; `gh stack
+// checkout` with no args lists stacks (including GitHub-only ones), not branches.
 func checkoutInteractive() error {
 	if isTerminal(os.Stdin) && isTerminal(os.Stderr) {
 		st, err := loadState()

@@ -162,11 +162,12 @@ rewriting its parent's commit.
 
 ### Checkout is a tree, like Graphite
 
-`gt co` without an argument opens a trunk-first tree of every locally tracked
-stack (not `gh stack switch`, which only lists the current stack). Enter
-checks out the highlighted branch via `gh stack checkout`, or `git checkout`
-for the trunk. The last row, **All stacks on GitHub**, is bare
-`gh stack checkout` — the picker for local *and* remote stacks.
+`gt co` without an argument opens a Graphite-style tree of every locally tracked
+stack: tips at the top, trunk at the bottom, each stack a continuous vertical
+track. Type to filter, arrows to move. Enter checks out the highlighted branch
+via `gh stack checkout`, or `git checkout` for the trunk. The last row, **All
+stacks on GitHub**, is bare `gh stack checkout` — the picker for local *and*
+remote stacks.
 
 A named argument is `gh stack checkout <target>`, except for the trunk and
 untracked local branches, which go through Git. `gt switch` still opens

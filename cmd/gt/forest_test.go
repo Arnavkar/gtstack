@@ -10,9 +10,9 @@ func TestStackForestSingleStack(t *testing.T) {
     }`)
 	got := stackForest(st, "b")
 	want := []pickRow{
+		{branch: "b", current: true, text: "◉  b"},
+		{branch: "a", text: "◯  a"},
 		{branch: "main", text: "◯  main"},
-		{branch: "a", text: "│  ◯  a"},
-		{branch: "b", text: "│  │  ◉  b  (current)"},
 	}
 	assertRows(t, got, want)
 }
@@ -27,10 +27,27 @@ func TestStackForestSiblingStacksShareTrunk(t *testing.T) {
     }`)
 	got := stackForest(st, "c")
 	want := []pickRow{
-		{branch: "main", text: "◯  main"},
-		{branch: "a", text: "│  ◯  a"},
-		{branch: "b", text: "│  │  ◯  b"},
-		{branch: "c", text: "│  ◉  c  (current)"},
+		{branch: "b", text: "◯    b"},
+		{branch: "a", text: "◯    a"},
+		{branch: "c", current: true, text: "│ ◉  c"},
+		{branch: "main", text: "◯─┘  main"},
+	}
+	assertRows(t, got, want)
+}
+
+func TestStackForestTwoSingleBranchStacks(t *testing.T) {
+	st := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [
+        {"trunk": {"branch": "main"}, "branches": [{"branch": "chore/annotation-ui-polish"}]},
+        {"trunk": {"branch": "main"}, "branches": [{"branch": "feat/set-up-hatchet-worker"}]}
+      ]
+    }`)
+	got := stackForest(st, "feat/set-up-hatchet-worker")
+	want := []pickRow{
+		{branch: "chore/annotation-ui-polish", text: "◯    chore/annotation-ui-polish"},
+		{branch: "feat/set-up-hatchet-worker", current: true, text: "│ ◉  feat/set-up-hatchet-worker"},
+		{branch: "main", text: "◯─┘  main"},
 	}
 	assertRows(t, got, want)
 }
@@ -42,8 +59,8 @@ func TestStackForestCurrentOnTrunk(t *testing.T) {
     }`)
 	got := stackForest(st, "main")
 	want := []pickRow{
-		{branch: "main", text: "◉  main  (current)"},
-		{branch: "a", text: "│  ◯  a"},
+		{branch: "a", text: "◯  a"},
+		{branch: "main", current: true, text: "◉  main"},
 	}
 	assertRows(t, got, want)
 }
@@ -61,7 +78,7 @@ func assertRows(t *testing.T, got, want []pickRow) {
 		t.Fatalf("got %d rows, want %d\n got %#v\nwant %#v", len(got), len(want), got, want)
 	}
 	for i := range want {
-		if got[i].branch != want[i].branch || got[i].text != want[i].text || got[i].openGithub != want[i].openGithub {
+		if got[i] != want[i] {
 			t.Errorf("row %d: got %+v, want %+v", i, got[i], want[i])
 		}
 	}
