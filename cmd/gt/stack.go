@@ -25,7 +25,7 @@ type stackState struct {
 }
 
 func loadState() (*stackState, error) {
-	dir, err := gitCommonDir()
+	dir, err := gitStackDir()
 	if err != nil {
 		return nil, fmt.Errorf("not a git repository")
 	}
@@ -101,7 +101,7 @@ func errForked(branch string) error {
 // pausedOperation reports which gh stack operation, if any, is halted waiting
 // for conflict resolution. gh stack drops a marker file per operation.
 func pausedOperation() (string, error) {
-	dir, err := gitCommonDir()
+	dir, err := gitStackDir()
 	if err != nil {
 		return "", fmt.Errorf("not a git repository")
 	}

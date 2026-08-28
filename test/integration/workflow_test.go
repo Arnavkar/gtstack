@@ -428,14 +428,10 @@ func TestUnsupportedCommands(t *testing.T) {
 
 // TestLinkedWorktree covers both sides of a case gt cannot fix on its own.
 //
-// gt reads the stack state from the shared git directory, so it recognises a
-// tracked branch from a linked worktree. gh stack v0.1.0 does not: run there,
-// every one of its commands reports the branch as untracked. So gt reaches the
-// right decision and then the command it runs fails anyway.
-//
-// The second half of this test is deliberately pinned to the broken
-// behaviour. When gh stack learns to find its state from a linked worktree,
-// this test fails and gt's handling finally pays off.
+// gt prefers `--git-dir` (the worktree's own gh-stack file) and falls back to
+// `--git-common-dir` when this checkout has not written one yet. A stack
+// created in the main repository must still be visible from a linked worktree
+// so `gt create` does not run `gh stack init` and start a second stack.
 func TestLinkedWorktree(t *testing.T) {
 	f := newFixture(t)
 	f.layer("layer-one", "Add layer one")
@@ -447,19 +443,7 @@ func TestLinkedWorktree(t *testing.T) {
 	f.git("worktree", "add", "--quiet", linked, "layer-one")
 	worktree := &fixture{t: t, dir: linked, origin: f.origin}
 
-	// gt's side: the state lives in the shared git directory and gt finds it.
-	// Reading it as absent would turn `gt create` into `gh stack init` and
-	// start a second stack.
 	if got := worktree.tracked(); len(got) != 1 || got[0] != "layer-one" {
 		t.Errorf("gt sees %q as the stack from a linked worktree, want [layer-one]", got)
-	}
-
-	// gh stack's side.
-	r := worktree.run("gh", "stack", "view")
-	if r.code == 0 {
-		t.Errorf("`gh stack view` now works in a linked worktree; gt already resolves state through "+
-			"--git-common-dir, so drop this expectation and test the worktree path for real\n%s", r.output())
-	} else if !strings.Contains(r.output(), "not part of a stack") {
-		t.Errorf("`gh stack view` failed differently in a linked worktree than the known v0.1.0 limitation\n%s", r.output())
 	}
 }

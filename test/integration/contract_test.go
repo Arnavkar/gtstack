@@ -168,7 +168,7 @@ func TestStateFileContract(t *testing.T) {
 	f.layer("layer-one", "Add layer one")
 	f.layer("layer-two", "Add layer two")
 
-	dir := f.git("rev-parse", "--path-format=absolute", "--git-common-dir")
+	dir := f.stackDir()
 	if _, err := os.Stat(filepath.Join(dir, "gh-stack")); err != nil {
 		t.Fatalf("gh stack no longer keeps its state at .git/gh-stack: %v", err)
 	}

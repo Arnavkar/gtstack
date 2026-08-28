@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/term"
@@ -189,9 +190,23 @@ func currentBranch() (string, error) {
 	return b, nil
 }
 
-// gitCommonDir is the shared .git directory, which is where gh stack keeps its
-// state even when the caller sits in a linked worktree.
-func gitCommonDir() (string, error) {
+// gitStackDir is the directory that holds this checkout's `gh-stack` state file.
+//
+// Current gh stack writes that file next to `--git-dir`, which in a linked
+// worktree is `.git/worktrees/<name>` rather than the shared repository.
+// Reading `--git-common-dir` instead finds the main checkout's file (often
+// empty) and reports every worktree branch as untracked.
+//
+// If this checkout has no file of its own yet, fall back to the common dir so
+// a stack created in the main repository is still visible from a new worktree.
+func gitStackDir() (string, error) {
+	gitDir, err := capture("git", "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "gh-stack")); err == nil {
+		return gitDir, nil
+	}
 	return capture("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
 }
 

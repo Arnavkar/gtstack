@@ -246,9 +246,10 @@ In a non-interactive environment it never installs software automatically; it
 prints the installation command and exits instead.
 
 To decide whether `gt create` should initialize or extend a stack, `gtstack`
-reads the state written by `gh stack` at `.git/gh-stack`. It refuses to run
-against an unknown schema version so that a future `gh-stack` update cannot
-silently corrupt a stack.
+reads the state written by `gh stack` at `.git/gh-stack` (the worktree git
+dir when you are in a linked worktree, otherwise the shared repository). It
+refuses to run against an unknown schema version so that a future `gh-stack`
+update cannot silently corrupt a stack.
 
 [gh-cli]: https://cli.github.com/
 [gh-stack]: https://github.com/github/gh-stack

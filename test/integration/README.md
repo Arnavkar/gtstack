@@ -79,11 +79,10 @@ Also untested: `gh stack switch` and `gh stack modify` open a TUI, and the
 
 ## Known `gh stack` v0.1.0 behaviour
 
-`gh stack` does not find its state from a **linked git worktree**: every one of
-its commands reports the current branch as untracked. `gt` resolves the state
-through `--git-common-dir` and gets the right answer, then the `gh stack`
-command it runs fails anyway. `TestLinkedWorktree` pins both halves, so when
-the extension learns to handle worktrees, that test fails and says so.
+`gt` reads `gh-stack` from `--git-dir` first (the worktree-local file current
+gh stack writes) and falls back to `--git-common-dir` when that file is
+absent. `TestLinkedWorktree` checks that a stack created in the main
+repository is still visible from a linked worktree.
 
 ## Re-recording the help snapshots
 

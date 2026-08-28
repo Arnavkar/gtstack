@@ -217,13 +217,21 @@ func (f *fixture) commitsIn(revRange string) int {
 	return n
 }
 
-// gitFileExists reports whether a path exists under the shared git directory,
-// which is where gh stack keeps its state.
+// gitFileExists reports whether a path exists next to this checkout's
+// gh-stack state (worktree git dir, else the shared common dir).
 func (f *fixture) gitFileExists(name string) bool {
 	f.t.Helper()
-	dir := f.git("rev-parse", "--path-format=absolute", "--git-common-dir")
-	_, err := os.Stat(filepath.Join(dir, name))
+	_, err := os.Stat(filepath.Join(f.stackDir(), name))
 	return err == nil
+}
+
+func (f *fixture) stackDir() string {
+	f.t.Helper()
+	gitDir := f.git("rev-parse", "--path-format=absolute", "--git-dir")
+	if _, err := os.Stat(filepath.Join(gitDir, "gh-stack")); err == nil {
+		return gitDir
+	}
+	return f.git("rev-parse", "--path-format=absolute", "--git-common-dir")
 }
 
 // stackState is the part of `.git/gh-stack` that gt reads. It is a deliberate
@@ -243,8 +251,7 @@ type stackState struct {
 
 func (f *fixture) state() stackState {
 	f.t.Helper()
-	dir := f.git("rev-parse", "--path-format=absolute", "--git-common-dir")
-	data, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+	data, err := os.ReadFile(filepath.Join(f.stackDir(), "gh-stack"))
 	if err != nil {
 		f.t.Fatalf("reading gh stack state: %v", err)
 	}
