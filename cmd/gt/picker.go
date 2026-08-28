@@ -84,7 +84,7 @@ func pickBranch(rows []pickRow) (pickRow, error) {
 			} else {
 				b.WriteString("  ")
 			}
-			b.WriteString(r.text)
+			b.WriteString(r.render(useColor(), i == sel))
 			b.WriteString("\r\n")
 		}
 		fmt.Fprint(os.Stderr, b.String())
