@@ -115,7 +115,7 @@ blindly forwarding the command.
 | `gt sync` | `gh stack sync` (`-d` maps to `--prune`) |
 | `gt restack` | `gh stack rebase` (`-d`/`-u` map to `--downstack`/`--upstack`) |
 | `gt continue` / `gt abort` | Continue or abort the paused `gh stack rebase` or `gh stack modify` |
-| `gt checkout` / `gt co` | `gh stack checkout`, `gh stack switch`, or `git checkout`, depending on the target |
+| `gt checkout` / `gt co` | tree of local stacks, or `gh stack checkout` / `git checkout` |
 | `gt get <pr>` | `gh stack checkout <pr>` |
 | `gt log` / `gt ls` / `gt ll` | `gh stack view`, `gh stack view --short`, or `git log --graph` |
 | `gt up`, `down`, `top`, `bottom`, `trunk` | The corresponding `gh stack` navigation command |
@@ -160,11 +160,17 @@ or amends with Git, then asks `gh stack` to rebase the upstack branches. If the
 current branch has no commits of its own, it creates a commit rather than
 rewriting its parent's commit.
 
-### Checkout is stack-scoped
+### Checkout is a tree, like Graphite
 
-`gt co` without an argument opens `gh stack switch`, which lists branches in
-the current stack rather than every tracked branch. Trunk and untracked local
-branches are checked out directly with Git.
+`gt co` without an argument opens a trunk-first tree of every locally tracked
+stack (not `gh stack switch`, which only lists the current stack). Enter
+checks out the highlighted branch via `gh stack checkout`, or `git checkout`
+for the trunk. The last row, **All stacks on GitHub**, is bare
+`gh stack checkout` — the picker for local *and* remote stacks.
+
+A named argument is `gh stack checkout <target>`, except for the trunk and
+untracked local branches, which go through Git. `gt switch` still opens
+`gh stack switch` when you only want the current stack.
 
 ## Transparent by default
 

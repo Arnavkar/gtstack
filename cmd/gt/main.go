@@ -36,7 +36,7 @@ var commands = []command{
 	{[]string{"restack"}, "gh stack rebase", cmdRestack},
 	{[]string{"continue"}, "gh stack rebase|modify --continue", cmdContinue},
 	{[]string{"abort"}, "gh stack rebase|modify --abort", cmdAbort},
-	{[]string{"checkout", "co"}, "gh stack checkout | gh stack switch", cmdCheckout},
+	{[]string{"checkout", "co"}, "tree picker | gh stack checkout", cmdCheckout},
 	{[]string{"get"}, "gh stack checkout", cmdGet},
 	{[]string{"log"}, "gh stack view", cmdLog},
 	{[]string{"ls"}, "gh stack view --short", func(a []string) error {

@@ -278,12 +278,44 @@ func cmdCheckout(args []string) error {
 		return run("gh", "stack", "trunk")
 	}
 	if fs.NArg() == 0 {
-		return run("gh", "stack", "switch")
+		return checkoutInteractive()
 	}
-	// gh stack checkout reads a bare name as a stack number, then a PR, then a
-	// tracked branch. Handing it the trunk or any untracked branch lands you on
-	// a different branch entirely, so route those to git.
-	target := fs.Arg(0)
+	return checkoutTarget(fs.Arg(0))
+}
+
+// checkoutInteractive is Graphite's bare `gt checkout`: a tree of local
+// stacks. `gh stack switch` only lists the current stack; `gh stack checkout`
+// with no args lists stacks (including GitHub-only ones), not branches.
+func checkoutInteractive() error {
+	if isTerminal(os.Stdin) && isTerminal(os.Stderr) {
+		st, err := loadState()
+		if err != nil {
+			return err
+		}
+		current, err := currentBranch()
+		if err != nil {
+			return err
+		}
+		rows := stackForest(st, current)
+		if len(rows) > 0 {
+			rows = append(rows, githubStacksRow())
+			chosen, err := pickBranch(rows)
+			if err != nil {
+				return err
+			}
+			if chosen.openGithub {
+				return run("gh", "stack", "checkout")
+			}
+			return checkoutTarget(chosen.branch)
+		}
+	}
+	return run("gh", "stack", "checkout")
+}
+
+// checkoutTarget sends a named branch to `gh stack checkout`, except for the
+// trunk and untracked local branches: a bare name is tried as a stack number
+// then a PR, so those would land you on the wrong branch.
+func checkoutTarget(target string) error {
 	if isLocalBranch(target) {
 		st, err := loadState()
 		if err != nil {
