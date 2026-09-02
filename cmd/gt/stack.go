@@ -12,16 +12,18 @@ import (
 // the state is no longer trustworthy and we must stop rather than guess.
 const schemaVersion = 1
 
+type trackedStack struct {
+	Trunk struct {
+		Branch string `json:"branch"`
+	} `json:"trunk"`
+	Branches []struct {
+		Branch string `json:"branch"`
+	} `json:"branches"`
+}
+
 type stackState struct {
-	SchemaVersion int `json:"schemaVersion"`
-	Stacks        []struct {
-		Trunk struct {
-			Branch string `json:"branch"`
-		} `json:"trunk"`
-		Branches []struct {
-			Branch string `json:"branch"`
-		} `json:"branches"`
-	} `json:"stacks"`
+	SchemaVersion int            `json:"schemaVersion"`
+	Stacks        []trackedStack `json:"stacks"`
 }
 
 func loadState() (*stackState, error) {
@@ -29,7 +31,7 @@ func loadState() (*stackState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("not a git repository")
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+	st, err := readStackFile(filepath.Join(dir, "gh-stack"))
 	if os.IsNotExist(err) {
 		// No file means either no stack has been created here yet, or the
 		// extension is missing. Reading it as "no stacks" would make gt report
@@ -40,6 +42,11 @@ func loadState() (*stackState, error) {
 		}
 		return &stackState{SchemaVersion: schemaVersion}, nil
 	}
+	return st, err
+}
+
+func readStackFile(path string) (*stackState, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +60,58 @@ func loadState() (*stackState, error) {
 			st.SchemaVersion, schemaVersion)
 	}
 	return &st, nil
+}
+
+// loadForestState unions stacks from this checkout and every linked worktree
+// so `gt checkout` can draw the whole local forest, not just the current
+// worktree's gh-stack file.
+func loadForestState() (*stackState, error) {
+	files, err := gitStackFiles()
+	if err != nil {
+		return nil, fmt.Errorf("not a git repository")
+	}
+	out := &stackState{SchemaVersion: schemaVersion}
+	found := false
+	for _, path := range files {
+		st, err := readStackFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		found = true
+		mergeStacks(out, st)
+	}
+	if !found {
+		if _, ierr := ensureExtension(); ierr != nil {
+			return nil, ierr
+		}
+	}
+	return out, nil
+}
+
+func mergeStacks(dst, src *stackState) {
+	seen := map[string]bool{}
+	for _, s := range dst.Stacks {
+		seen[stackKey(s)] = true
+	}
+	for _, s := range src.Stacks {
+		k := stackKey(s)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		dst.Stacks = append(dst.Stacks, s)
+	}
+}
+
+func stackKey(s trackedStack) string {
+	key := s.Trunk.Branch
+	for _, b := range s.Branches {
+		key += "\x00" + b.Branch
+	}
+	return key
 }
 
 // position describes where a branch sits in the tracked stacks.

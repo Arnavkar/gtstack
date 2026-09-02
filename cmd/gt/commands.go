@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -216,15 +217,37 @@ func submitArgs(edit, publish bool) []string {
 
 func cmdSync(args []string) error {
 	fs := newFlags("sync")
-	deleteAll := fs.BoolP("delete-all", "d", false, "delete branches for merged PRs without prompting")
+	deleteAll := fs.BoolP("delete-all", "d", false, "delete merged, closed, or remotely-deleted local branches without prompting")
 	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if err := fastForwardTrunk(); err != nil {
 		return err
 	}
 	gh := []string{"stack", "sync"}
 	if *deleteAll {
 		gh = append(gh, "--prune")
 	}
-	return run("gh", gh...)
+	branch, err := currentBranch()
+	if err != nil {
+		return err
+	}
+	st, err := loadState()
+	if err != nil {
+		return err
+	}
+	if locate(st, branch).inStack {
+		stderr, err := runRecording("gh", gh...)
+		if err != nil && !ignorableStackSyncError(stderr) {
+			return err
+		}
+	}
+	return pruneStaleBranches(*deleteAll)
+}
+
+func ignorableStackSyncError(stderr string) bool {
+	return strings.Contains(stderr, "is not part of a stack") ||
+		strings.Contains(stderr, "cannot force update the branch")
 }
 
 func cmdRestack(args []string) error {
@@ -284,11 +307,12 @@ func cmdCheckout(args []string) error {
 }
 
 // checkoutInteractive is Graphite's bare `gt checkout`: a bottom-up tree of
-// local stacks. `gh stack switch` only lists the current stack; `gh stack
-// checkout` with no args lists stacks (including GitHub-only ones), not branches.
+// every locally tracked stack (this worktree and the others). `gh stack switch`
+// only lists the current stack; the last row opens `gh stack checkout` for
+// stacks that exist only on GitHub.
 func checkoutInteractive() error {
 	if isTerminal(os.Stdin) && isTerminal(os.Stderr) {
-		st, err := loadState()
+		st, err := loadForestState()
 		if err != nil {
 			return err
 		}
@@ -296,18 +320,16 @@ func checkoutInteractive() error {
 		if err != nil {
 			return err
 		}
-		rows := stackForest(st, current)
-		if len(rows) > 0 {
-			rows = append(rows, githubStacksRow())
-			chosen, err := pickBranch(rows)
-			if err != nil {
-				return err
-			}
-			if chosen.openGithub {
-				return run("gh", "stack", "checkout")
-			}
-			return checkoutTarget(chosen.branch)
+		rows := ensureCurrent(stackForest(st, current), current)
+		rows = append(rows, githubStacksRow())
+		chosen, err := pickBranch(rows)
+		if err != nil {
+			return err
 		}
+		if chosen.openGithub {
+			return run("gh", "stack", "checkout")
+		}
+		return checkoutTarget(chosen.branch)
 	}
 	return run("gh", "stack", "checkout")
 }

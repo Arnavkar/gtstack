@@ -98,3 +98,37 @@ func TestLocateNoStacks(t *testing.T) {
 		t.Errorf("locate on empty state = %+v, want zero", got)
 	}
 }
+
+func TestMergeStacksUnionsDistinct(t *testing.T) {
+	dst := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [{"trunk": {"branch": "main"}, "branches": [{"branch": "a"}]}]
+    }`)
+	src := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [{"trunk": {"branch": "main"}, "branches": [{"branch": "b"}]}]
+    }`)
+	mergeStacks(dst, src)
+	if len(dst.Stacks) != 2 {
+		t.Fatalf("got %d stacks, want 2", len(dst.Stacks))
+	}
+	got := stackForest(dst, "b")
+	if len(got) != 3 {
+		t.Fatalf("forest has %d rows, want a, b, and main", len(got))
+	}
+}
+
+func TestMergeStacksDedupesIdentical(t *testing.T) {
+	dst := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [{"trunk": {"branch": "main"}, "branches": [{"branch": "a"}]}]
+    }`)
+	src := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [{"trunk": {"branch": "main"}, "branches": [{"branch": "a"}]}]
+    }`)
+	mergeStacks(dst, src)
+	if len(dst.Stacks) != 1 {
+		t.Fatalf("got %d stacks, want 1", len(dst.Stacks))
+	}
+}

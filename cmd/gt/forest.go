@@ -146,6 +146,19 @@ func githubStacksRow() pickRow {
 	return pickRow{openGithub: true, text: "…  All stacks on GitHub"}
 }
 
+// ensureCurrent puts the current branch at the top when it is not already in
+// the forest (an untracked branch, or a stack recorded in no gh-stack file).
+func ensureCurrent(rows []pickRow, current string) []pickRow {
+	for _, r := range rows {
+		if r.branch == current {
+			return rows
+		}
+	}
+	graph := []graphSpan{{s: nodeMark(true), col: -2}}
+	row := pickRow{branch: current, current: true, graph: graph, text: rowText(graph, current)}
+	return append([]pickRow{row}, rows...)
+}
+
 // Graphite-ish palette: one hue per stack column, cycling if there are more
 // stacks than colors. -1 is dim (trunk node); -2 is uncolored.
 var stackPalette = []string{

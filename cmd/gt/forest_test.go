@@ -106,6 +106,29 @@ func TestStackForestEmpty(t *testing.T) {
 	}
 }
 
+func TestEnsureCurrentAddsMissing(t *testing.T) {
+	st := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [{"trunk": {"branch": "main"}, "branches": [{"branch": "a"}]}]
+    }`)
+	got := ensureCurrent(stackForest(st, "scratch"), "scratch")
+	if got[0].branch != "scratch" || !got[0].current {
+		t.Fatalf("untracked current was not prepended: %+v", got[0])
+	}
+}
+
+func TestEnsureCurrentLeavesPresent(t *testing.T) {
+	st := stateFrom(t, `{
+      "schemaVersion": 1,
+      "stacks": [{"trunk": {"branch": "main"}, "branches": [{"branch": "a"}]}]
+    }`)
+	forest := stackForest(st, "a")
+	got := ensureCurrent(forest, "a")
+	if len(got) != len(forest) {
+		t.Fatalf("duplicated current: got %d rows, want %d", len(got), len(forest))
+	}
+}
+
 func assertRows(t *testing.T, got, want []pickRow) {
 	t.Helper()
 	if len(got) != len(want) {

@@ -24,3 +24,15 @@ func TestSubmitArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestIgnorableStackSyncError(t *testing.T) {
+	if !ignorableStackSyncError(`fatal: cannot force update the branch 'main' used by worktree at '/repo'`) {
+		t.Error("worktree force-update should be ignorable")
+	}
+	if !ignorableStackSyncError(`current branch "main" is not part of a stack`) {
+		t.Error("not on a stack should be ignorable")
+	}
+	if ignorableStackSyncError("rebase conflict") {
+		t.Error("a real sync failure must not be ignored")
+	}
+}

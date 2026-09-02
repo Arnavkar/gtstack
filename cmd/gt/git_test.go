@@ -69,3 +69,14 @@ func TestJoinMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestParseWorktreeBranchPaths(t *testing.T) {
+	out := "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo-feat\nHEAD def\nbranch refs/heads/feat/a\n\nworktree /repo-detach\nHEAD ghi\ndetached\n"
+	got := parseWorktreeBranchPaths(out)
+	if got["main"] != "/repo" || got["feat/a"] != "/repo-feat" {
+		t.Fatalf("parseWorktreeBranchPaths = %#v", got)
+	}
+	if _, ok := got[""]; ok {
+		t.Fatal("detached HEAD should not map an empty branch")
+	}
+}

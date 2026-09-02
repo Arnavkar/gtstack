@@ -304,6 +304,85 @@ func TestSyncPushesTheStack(t *testing.T) {
 	}
 }
 
+// TestSyncDeletesGoneUpstream covers the local cleanup gt does after
+// `gh stack sync`: a branch whose remote-tracking ref was deleted is removed
+// with -d, and only reported (not deleted) without a terminal.
+func TestSyncDeletesGoneUpstream(t *testing.T) {
+	f := newFixture(t)
+	f.layer("layer-one", "Add layer one")
+
+	f.git("checkout", "--quiet", "-b", "scratch")
+	f.write("scratch.txt", "scratch\n")
+	f.git("add", "-A")
+	f.git("commit", "--quiet", "-m", "scratch")
+	f.git("push", "--quiet", "-u", "origin", "scratch")
+	f.git("checkout", "--quiet", "layer-one")
+	f.git("push", "origin", "--delete", "scratch")
+
+	listed := f.gt("sync")
+	if !strings.Contains(listed.stderr, "scratch") || !strings.Contains(listed.stderr, "gone") {
+		t.Errorf("gt sync did not report the gone upstream:\n%s", listed.output())
+	}
+	if !strings.Contains(listed.stderr, "pass -d") {
+		t.Errorf("gt sync did not explain how to delete without a terminal:\n%s", listed.output())
+	}
+	if f.git("branch", "--list", "scratch") == "" {
+		t.Error("gt sync deleted scratch without -d or a prompt")
+	}
+
+	deleted := f.gt("sync", "-d")
+	if !deleted.announced("git branch -D scratch") {
+		t.Errorf("gt sync -d did not delete scratch:\n%s", deleted.output())
+	}
+	if f.git("branch", "--list", "scratch") != "" {
+		t.Error("scratch still exists after gt sync -d")
+	}
+}
+
+// TestSyncOnTrunkWithoutStack: gh stack sync refuses to run off a stack, but
+// gt sync on main should still fetch and fast-forward the trunk.
+func TestSyncOnTrunkWithoutStack(t *testing.T) {
+	f := newFixture(t)
+	f.git("checkout", "--quiet", "-b", "tmp")
+	f.write("ahead.txt", "ahead\n")
+	f.git("add", "-A")
+	f.git("commit", "--quiet", "-m", "ahead")
+	f.git("push", "--quiet", "origin", "tmp:main")
+	f.git("checkout", "--quiet", "main")
+	f.git("branch", "--quiet", "-D", "tmp")
+
+	r := f.gt("sync")
+	if r.announced("gh stack sync") {
+		t.Errorf("gt sync on the trunk should not run gh stack sync\n%s", r.output())
+	}
+	if f.git("rev-parse", "main") != f.git("rev-parse", "origin/main") {
+		t.Errorf("main was not fast-forwarded: local %s origin %s", f.git("rev-parse", "main"), f.git("rev-parse", "origin/main"))
+	}
+}
+
+// TestSyncUpdatesTrunkInOtherWorktree: git will not `branch -f main` while
+// another worktree has it checked out. gt sync must move main in that worktree.
+func TestSyncUpdatesTrunkInOtherWorktree(t *testing.T) {
+	f := newFixture(t)
+	f.layer("layer-one", "Add layer one")
+	f.gt("trunk")
+
+	linked := f.dir + "-worktree"
+	f.git("worktree", "add", "--quiet", linked, "layer-one")
+
+	f.write("ahead.txt", "ahead\n")
+	f.git("add", "-A")
+	f.git("commit", "--quiet", "-m", "ahead")
+	f.git("push", "--quiet", "origin", "main")
+	f.git("reset", "--hard", "--quiet", "HEAD~1")
+
+	worktree := &fixture{t: t, dir: linked, origin: f.origin}
+	worktree.gt("sync")
+	if f.git("rev-parse", "main") != f.git("rev-parse", "origin/main") {
+		t.Errorf("main in %s was not updated: local %s origin %s", f.dir, f.git("rev-parse", "main"), f.git("rev-parse", "origin/main"))
+	}
+}
+
 // TestCheckoutRouting: `gh stack checkout` reads a bare name as a stack
 // number, then a PR, then a tracked branch, so gt sends anything it knows to
 // be untracked to git instead.

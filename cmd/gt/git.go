@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +36,37 @@ func run(name string, args ...string) error {
 		return fmt.Errorf("%s is not installed, or not on PATH", name)
 	}
 	return err
+}
+
+func runRecording(name string, args ...string) (string, error) {
+	stderr, err := execRecording(name, args)
+	if err == nil {
+		return stderr, nil
+	}
+	if name == "gh" && len(args) > 0 && args[0] == "stack" {
+		installed, ierr := ensureExtension()
+		if ierr != nil {
+			return stderr, ierr
+		}
+		if installed {
+			return execRecording(name, args)
+		}
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return stderr, fmt.Errorf("%s is not installed, or not on PATH", name)
+	}
+	return stderr, err
+}
+
+func execRecording(name string, args []string) (string, error) {
+	announce(name, args)
+	var buf bytes.Buffer
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
+	err := cmd.Run()
+	return buf.String(), err
 }
 
 func exec1(name string, args []string) error {
@@ -74,17 +107,31 @@ func ensureExtension() (installed bool, err error) {
 // confirmInstall asks before pulling a binary off the network. With no terminal
 // there is nobody to ask, so it declines rather than installing unattended.
 func confirmInstall() bool {
+	return confirm("gt: the gh stack extension is not installed. Install it now?", true)
+}
+
+// confirm asks a yes/no question on stderr. With no terminal it returns false
+// rather than taking a default into the void.
+func confirm(prompt string, defaultYes bool) bool {
 	if !isTerminal(os.Stdin) {
 		return false
 	}
-	fmt.Fprint(os.Stderr, "gt: the gh stack extension is not installed. Install it now? [Y/n] ")
+	hint := "[y/N]"
+	if defaultYes {
+		hint = "[Y/n]"
+	}
+	fmt.Fprintf(os.Stderr, "%s %s ", prompt, hint)
 	answer, ok := readLine(os.Stdin)
 	if !ok {
 		return false
 	}
 	switch strings.ToLower(answer) {
-	case "", "y", "yes":
+	case "y", "yes":
 		return true
+	case "n", "no":
+		return false
+	case "":
+		return defaultYes
 	}
 	return false
 }
@@ -190,6 +237,70 @@ func currentBranch() (string, error) {
 	return b, nil
 }
 
+// fastForwardTrunk fetches origin and moves the stack trunk (usually main) to
+// match it. Git refuses `branch -f` on a branch another worktree has checked
+// out, so when that happens the fast-forward runs in that worktree instead.
+func fastForwardTrunk() error {
+	if err := run("git", "fetch", "origin"); err != nil {
+		return err
+	}
+	trunk := fallbackTrunk(trunkNames())
+	remote := "origin/" + trunk
+	if run2("git", "rev-parse", "--verify", "--quiet", remote) != nil {
+		return nil
+	}
+	local, err := capture("git", "rev-parse", trunk)
+	if err != nil {
+		return nil
+	}
+	want, err := capture("git", "rev-parse", remote)
+	if err != nil {
+		return err
+	}
+	if local == want {
+		return nil
+	}
+	wt, err := worktreePathForBranch(trunk)
+	if err != nil {
+		return err
+	}
+	if wt == "" {
+		return run("git", "branch", "--force", "--", trunk, remote)
+	}
+	return run("git", "-C", wt, "merge", "--ff-only", remote)
+}
+
+func worktreePathForBranch(name string) (string, error) {
+	out, err := capture("git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", err
+	}
+	return parseWorktreeBranchPaths(out)[name], nil
+}
+
+func parseWorktreeBranchPaths(out string) map[string]string {
+	m := map[string]string{}
+	var path, branch string
+	flush := func() {
+		if path != "" && branch != "" {
+			m[branch] = path
+		}
+		path, branch = "", ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case line == "":
+			flush()
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "branch "):
+			branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		}
+	}
+	flush()
+	return m
+}
+
 // gitStackDir is the directory that holds this checkout's `gh-stack` state file.
 //
 // Current gh stack writes that file next to `--git-dir`, which in a linked
@@ -208,6 +319,40 @@ func gitStackDir() (string, error) {
 		return gitDir, nil
 	}
 	return capture("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+}
+
+// gitStackFiles is every gh-stack path that might hold local stacks: this
+// checkout, the shared repository, and each linked worktree. gh stack writes
+// per git-dir, so a worktree only sees its own stacks unless we union them.
+func gitStackFiles() ([]string, error) {
+	gitDir, err := capture("git", "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return nil, err
+	}
+	common, err := capture("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var files []string
+	add := func(dir string) {
+		if dir == "" || seen[dir] {
+			return
+		}
+		seen[dir] = true
+		files = append(files, filepath.Join(dir, "gh-stack"))
+	}
+	add(gitDir)
+	add(common)
+	entries, err := os.ReadDir(filepath.Join(common, "worktrees"))
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				add(filepath.Join(common, "worktrees", e.Name()))
+			}
+		}
+	}
+	return files, nil
 }
 
 func isLocalBranch(name string) bool {
