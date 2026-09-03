@@ -36,9 +36,12 @@ repository afterwards — branches, commits, rebase results, the state file:
 | Starting and extending a stack | `gt create`, including the fork guard and generated branch names |
 | Amend and cascade | `gt modify`, on the top branch, in the middle, and on a branch with no commits |
 | Rebasing | `gt restack`, `-d`, `-u`, `-o` |
-| Sync | `gt sync`, `gt sync -d` |
+| Sync | `gt sync`, `gt sync -d` (stack branches only) |
+| Diagnostics | `gt doctor`, `--json`, `--repair --yes` |
+| Plain Git | commit / rebase / reset on stacked and untracked branches |
 | Reading the stack | `gt log`, `gt ls`, `gt ll`, `gt log --json` |
-| Navigation | `gt up`, `down`, `top`, `bottom`, `trunk` |
+| Navigation | `gt up`/`u`, `down`/`d`, `top`/`t`, `bottom`/`b`, `trunk` |
+| Git passthrough | `gt add`, `cherry-pick`, `rebase`, `reset`, `restore` |
 | Checkout routing | tracked branch, untracked branch, trunk, `-t` |
 | Conflicts | pause detection, `gt continue`, `gt abort` |
 | Refusals | unsupported commands, unknown commands, conflicting flags |

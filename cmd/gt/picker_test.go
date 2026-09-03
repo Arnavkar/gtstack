@@ -20,3 +20,18 @@ func TestFilterRowsSubstring(t *testing.T) {
 		t.Fatalf("filter github = %#v", got)
 	}
 }
+
+func TestFilterRowsMatchesDetail(t *testing.T) {
+	rows := []pickRow{
+		{branch: "feat/a", detail: "PR #12 merged", text: "feat/a  PR #12 merged"},
+		{branch: "feat/b", detail: untrackedDetail, text: "feat/b  " + untrackedDetail},
+	}
+	got := filterRows(rows, "merged")
+	if len(got) != 1 || got[0].branch != "feat/a" {
+		t.Fatalf("filter merged = %#v", got)
+	}
+	got = filterRows(rows, "track")
+	if len(got) != 1 || got[0].branch != "feat/b" {
+		t.Fatalf("filter track = %#v", got)
+	}
+}

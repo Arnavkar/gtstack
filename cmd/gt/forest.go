@@ -1,16 +1,22 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // pickRow is one line in the checkout tree. openGithub means "run
 // `gh stack checkout` with no arguments" instead of checking out a branch.
 type pickRow struct {
 	branch     string
 	text       string
+	detail     string // dim suffix, e.g. why a branch is stale
 	graph      []graphSpan
 	openGithub bool
 	current    bool
 	trunk      bool
+	untracked  bool // local branch not in gh-stack metadata
 }
 
 type graphSpan struct {
@@ -146,6 +152,109 @@ func githubStacksRow() pickRow {
 	return pickRow{openGithub: true, text: "…  All stacks on GitHub"}
 }
 
+const untrackedDetail = "not in a stack · gt track"
+
+func checkoutRows(st *stackState, current string) []pickRow {
+	tracked := stackedBranchNames(st)
+	trunk := fallbackTrunk(trunkNames())
+	st = withWorktreeStacks(st, worktreeBranchNames(), trunk)
+	rows := keepExistingRows(stackForest(st, current), localBranchSet())
+	rows = ensureCurrent(rows, current)
+	return markUntrackedRows(rows, tracked, trunk)
+}
+
+func stackedBranchNames(st *stackState) map[string]bool {
+	m := map[string]bool{}
+	if st == nil {
+		return m
+	}
+	for _, s := range st.Stacks {
+		if s.Trunk.Branch != "" {
+			m[s.Trunk.Branch] = true
+		}
+		for _, b := range s.Branches {
+			if b.Branch != "" {
+				m[b.Branch] = true
+			}
+		}
+	}
+	return m
+}
+
+func markUntrackedRows(rows []pickRow, tracked map[string]bool, trunk string) []pickRow {
+	for i := range rows {
+		r := &rows[i]
+		if r.openGithub || r.trunk || r.branch == "" || r.branch == trunk || tracked[r.branch] {
+			continue
+		}
+		r.untracked = true
+		if r.detail == "" {
+			r.detail = untrackedDetail
+		}
+	}
+	return rows
+}
+
+func localBranchSet() map[string]bool {
+	out, err := capture("git", "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return nil
+	}
+	branches := map[string]bool{}
+	for _, name := range strings.Fields(out) {
+		branches[name] = true
+	}
+	return branches
+}
+
+func worktreeBranchNames() []string {
+	out, err := capture("git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for name := range parseWorktreeBranchPaths(out) {
+		names = append(names, name)
+	}
+	return names
+}
+
+func withWorktreeStacks(st *stackState, names []string, trunk string) *stackState {
+	if st == nil {
+		st = &stackState{SchemaVersion: ghStackCompat.PrimarySchema()}
+	}
+	have := map[string]bool{}
+	for _, s := range st.Stacks {
+		have[s.Trunk.Branch] = true
+		for _, b := range s.Branches {
+			have[b.Branch] = true
+		}
+	}
+	sorted := append([]string{}, names...)
+	sort.Strings(sorted)
+	for _, name := range sorted {
+		if name == "" || name == trunk || have[name] {
+			continue
+		}
+		have[name] = true
+		st.Stacks = append(st.Stacks, trackedStack{
+			Trunk:    trackedBranch{Branch: trunk},
+			Branches: []trackedBranch{{Branch: name}},
+		})
+	}
+	return st
+}
+
+func keepExistingRows(rows []pickRow, exists map[string]bool) []pickRow {
+	var out []pickRow
+	for _, r := range rows {
+		if r.trunk || r.openGithub || r.current || r.branch == "" || exists[r.branch] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // ensureCurrent puts the current branch at the top when it is not already in
 // the forest (an untracked branch, or a stack recorded in no gh-stack file).
 func ensureCurrent(rows []pickRow, current string) []pickRow {
@@ -155,7 +264,7 @@ func ensureCurrent(rows []pickRow, current string) []pickRow {
 		}
 	}
 	graph := []graphSpan{{s: nodeMark(true), col: -2}}
-	row := pickRow{branch: current, current: true, graph: graph, text: rowText(graph, current)}
+	row := pickRow{branch: current, current: true, untracked: true, graph: graph, detail: untrackedDetail, text: rowText(graph, current)}
 	return append([]pickRow{row}, rows...)
 }
 
@@ -208,10 +317,14 @@ func (r pickRow) render(color, selected bool) string {
 		b = append(b, paint("\x1b[1;32m", r.branch)...)
 	case r.current:
 		b = append(b, paint("\x1b[1;36m", r.branch)...)
-	case r.trunk:
+	case r.trunk, r.untracked:
 		b = append(b, paint("\x1b[2m", r.branch)...)
 	default:
 		b = append(b, r.branch...)
+	}
+	if r.detail != "" {
+		b = append(b, "  "...)
+		b = append(b, paint("\x1b[2m", r.detail)...)
 	}
 	return string(b)
 }

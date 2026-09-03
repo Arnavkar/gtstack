@@ -111,21 +111,83 @@ blindly forwarding the command.
 | --- | --- |
 | `gt create` / `gt c` | `gh stack init` for a new stack, or `gh stack add` at the top of an existing stack |
 | `gt modify` / `gt m` | `git commit [--amend]`, then `gh stack rebase --upstack --no-trunk` |
-| `gt submit` / `gt s` / `gt ss` | `gh stack submit --auto` (`-e` opens the editor) |
-| `gt sync` | `gh stack sync` (`-d` maps to `--prune`) |
+| `gt submit` / `gt s` / `gt ss` | `gh stack submit --auto` (`-e` opens the editor; `-u` is accepted but cannot skip new PRs) |
+| `gt sync` | fetch trunk + stack branches, restack (does not push; `-d` deletes stale **stack** branches only) |
 | `gt restack` | `gh stack rebase` (`-d`/`-u` map to `--downstack`/`--upstack`) |
+| `gt doctor` | diagnose Git vs local `gh-stack` vs worktrees vs GitHub (`--repair`, `--json`) |
 | `gt continue` / `gt abort` | Continue or abort the paused `gh stack rebase` or `gh stack modify` |
 | `gt checkout` / `gt co` | tree of local stacks, or `gh stack checkout` / `git checkout` |
 | `gt get <pr>` | `gh stack checkout <pr>` |
 | `gt log` / `gt ls` / `gt ll` | `gh stack view`, `gh stack view --short`, or `git log --graph` |
-| `gt up`, `down`, `top`, `bottom`, `trunk` | The corresponding `gh stack` navigation command |
+| `gt up` / `u`, `down` / `d`, `top` / `t`, `bottom` / `b`, `trunk` | The corresponding `gh stack` navigation command |
+| `gt add`, `cherry-pick`, `rebase`, `reset`, `restore` | The same `git` command, arguments unchanged |
+| `gt track` / `gt tr` | `gh stack init --base <trunk> <branches>` (current branch if none given) |
 | `gt merge` | `gh stack merge` |
 | `gt switch` | `gh stack switch` |
 | `gt pr` | `gh pr view --web` |
-| `gt init` | Nothing. Explains that `gh stack` has no repository-level init |
+| `gt init` | Nothing. Explains that `gh stack` has no repository-level init; use `gt track` to adopt branches |
 
 Run `gt <command> --help` for the supported flags. Unknown flags are rejected
 rather than silently dropped.
+
+## Normal Git is supported
+
+`gtstack` is a wrapper, not a gate. Commits, checkouts, cherry-picks, and other
+Git commands do not have to go through `gt`. When those operations change stack
+structure, `gt doctor` explains the disagreement and can repair **metadata**.
+
+```text
+git commit          safe
+git checkout        safe
+git cherry-pick     generally safe; doctor can detect ancestry changes
+git rebase / reset / branch -f
+                    allowed. May invalidate stack ancestry or cached SHAs.
+                    Run `gt doctor` afterwards if you touched stack branches.
+```
+
+`gt sync -d` only deletes branches that appear in local `gh-stack` state. Ordinary
+untracked branches are left alone, even if their upstream is gone.
+
+### `gt doctor`
+
+```sh
+gt doctor              # read-only diagnostics
+gt doctor --json       # machine-readable (no prompts)
+gt doctor --repair     # safe metadata repairs; asks in a terminal
+gt doctor --repair --yes
+```
+
+`--yes` applies only repairs classified as safe (refresh cached SHAs, drop
+duplicate identical stacks, copy authoritative state into a worktree that is
+missing it). It never resolves conflicting stack definitions or rewrites Git
+history. Prefix disagreements are ambiguous and are never resolved by `--yes`;
+use `gh stack modify` to choose the intended stack.
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | healthy |
+| 1 | warnings only (for example, a descendant needs `gt restack -u`) |
+| 2 | repairable errors |
+| 3 | ambiguous/unsafe state; do not guess |
+| 4 | missing git/`gh`/`gh-stack`, GitHub API failure, or an unsupported state schema |
+
+If two worktrees disagree about stack order, `gt` stops and tells you to run
+`gt doctor`. No changes are made.
+
+## Pinning `gh-stack`
+
+This shim targets **v0.1.0** and schema **v1**. CI installs that pin
+(`.github/workflows/ci.yml`). The daily `gh-stack-compat` workflow tests
+`latest` as an early warning; it does not change what developers should run.
+
+```sh
+gh extension install github/gh-stack --pin v0.1.0 --force
+```
+
+A newer `gh-stack` with the same schema warns and continues. An unknown
+schema is a hard stop.
 
 ## Important differences from Graphite
 
@@ -142,7 +204,9 @@ not support forks:
 
 Graphite's `gt submit` submits the current branch and its downstack branches.
 `gh stack submit` covers the entire stack, so `gtstack` does too. Pass `-e` to
-open the submit editor and deselect branches.
+open the submit editor and deselect branches. Graphite's `-u` / `--update-only`
+is accepted so `gt ss -u` still runs; there is no way to skip branches without
+PRs, so `gt` prints a note and submits them anyway.
 
 `gh stack submit` opens that editor whenever it has a terminal. Graphite's
 submit does not, so `gt submit` passes `--auto` and skips it. New PRs are
@@ -164,10 +228,12 @@ rewriting its parent's commit.
 
 `gt co` without an argument opens a Graphite-style tree of every locally tracked
 stack: tips at the top, trunk at the bottom, each stack a continuous vertical
-track. Type to filter, arrows to move. Enter checks out the highlighted branch
-via `gh stack checkout`, or `git checkout` for the trunk. The last row, **All
-stacks on GitHub**, is bare `gh stack checkout` — the picker for local *and*
-remote stacks.
+track. Branches that exist locally but are not in `gh-stack` metadata still
+appear, dimmed, with `not in a stack · gt track` — adopt them with `gt track`;
+`gt create` would start a new branch on top instead. Type to filter, arrows to
+move. Enter checks out the highlighted branch via `gh stack checkout`, or
+`git checkout` for the trunk. The last row, **All stacks on GitHub**, is bare
+`gh stack checkout` — the picker for local *and* remote stacks.
 
 A named argument is `gh stack checkout <target>`, except for the trunk and
 untracked local branches, which go through Git. `gt switch` still opens
@@ -223,13 +289,13 @@ recipe instead — `gt squash` points at `git reset --soft <parent>`, for exampl
 ### The scope does not match
 
 ```text
-track  untrack  unlink
+untrack  unlink
 ```
 
-Graphite tracks and untracks one branch. `gh stack` works a whole stack at a
-time: `gh stack init` adopts a list of branches into a new stack, and
-`gh stack unstack` drops an entire stack. Translating between them would
-silently widen what you asked for, so `gt` refuses instead.
+Graphite untracks one branch. `gh stack unstack` drops an entire stack.
+`gt track` is the exception: it maps onto `gh stack init` of the named
+branches (or the current one). `gt untrack` still refuses rather than
+unstacking more than you asked for.
 
 ### Not a stack operation
 
@@ -253,10 +319,11 @@ In a non-interactive environment it never installs software automatically; it
 prints the installation command and exits instead.
 
 To decide whether `gt create` should initialize or extend a stack, `gtstack`
-reads the state written by `gh stack` at `.git/gh-stack` (the worktree git
-dir when you are in a linked worktree, otherwise the shared repository). It
-refuses to run against an unknown schema version so that a future `gh-stack`
-update cannot silently corrupt a stack.
+reads every `.git/gh-stack` file in the repository (the current worktree git
+dir, the shared repository, and linked worktrees). Identical copies are
+deduplicated; incompatible orders are reported rather than merged. It refuses
+to run against an unknown schema version so that a future `gh-stack` update
+cannot silently corrupt a stack.
 
 [gh-cli]: https://cli.github.com/
 [gh-stack]: https://github.com/github/gh-stack

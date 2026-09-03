@@ -18,19 +18,14 @@ import (
 // first: the point of gt is to be a stepping stone to gh stack, so the native
 // command has to be visible.
 func run(name string, args ...string) error {
+	if name == "gh" && len(args) > 0 && args[0] == "stack" && (len(args) == 1 || args[1] != "--version") {
+		if err := requireGhStack(); err != nil {
+			return err
+		}
+	}
 	err := exec1(name, args)
 	if err == nil {
 		return nil
-	}
-	// A failing `gh stack` call may only mean the extension is not installed.
-	if name == "gh" && len(args) > 0 && args[0] == "stack" {
-		installed, ierr := ensureExtension()
-		if ierr != nil {
-			return ierr
-		}
-		if installed {
-			return exec1(name, args)
-		}
 	}
 	if errors.Is(err, exec.ErrNotFound) {
 		return fmt.Errorf("%s is not installed, or not on PATH", name)
@@ -39,18 +34,14 @@ func run(name string, args ...string) error {
 }
 
 func runRecording(name string, args ...string) (string, error) {
+	if name == "gh" && len(args) > 0 && args[0] == "stack" && (len(args) == 1 || args[1] != "--version") {
+		if err := requireGhStack(); err != nil {
+			return "", err
+		}
+	}
 	stderr, err := execRecording(name, args)
 	if err == nil {
 		return stderr, nil
-	}
-	if name == "gh" && len(args) > 0 && args[0] == "stack" {
-		installed, ierr := ensureExtension()
-		if ierr != nil {
-			return stderr, ierr
-		}
-		if installed {
-			return execRecording(name, args)
-		}
 	}
 	if errors.Is(err, exec.ErrNotFound) {
 		return stderr, fmt.Errorf("%s is not installed, or not on PATH", name)
@@ -66,6 +57,30 @@ func execRecording(name string, args []string) (string, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
 	err := cmd.Run()
+	return buf.String(), err
+}
+
+// runTee is runRecording but also copies stdout, so a child that prints
+// errors on stdout still leaves something to inspect.
+func runTee(name string, args ...string) (string, error) {
+	if name == "gh" && len(args) > 0 && args[0] == "stack" && (len(args) == 1 || args[1] != "--version") {
+		if err := requireGhStack(); err != nil {
+			return "", err
+		}
+	}
+	announce(name, args)
+	var buf bytes.Buffer
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
+	err := cmd.Run()
+	if err == nil {
+		return buf.String(), nil
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return buf.String(), fmt.Errorf("%s is not installed, or not on PATH", name)
+	}
 	return buf.String(), err
 }
 
@@ -226,6 +241,13 @@ func passthrough(sub string) func([]string) error {
 	}
 }
 
+// gitPass forwards a Graphite git-passthrough command to `git <sub>`.
+func gitPass(sub string) func([]string) error {
+	return func(args []string) error {
+		return run("git", append([]string{sub}, args...)...)
+	}
+}
+
 func currentBranch() (string, error) {
 	b, err := capture("git", "branch", "--show-current")
 	if err != nil {
@@ -241,7 +263,7 @@ func currentBranch() (string, error) {
 // match it. Git refuses `branch -f` on a branch another worktree has checked
 // out, so when that happens the fast-forward runs in that worktree instead.
 func fastForwardTrunk() error {
-	if err := run("git", "fetch", "origin"); err != nil {
+	if err := fetchStackOrigin(); err != nil {
 		return err
 	}
 	trunk := fallbackTrunk(trunkNames())
@@ -268,6 +290,86 @@ func fastForwardTrunk() error {
 		return run("git", "branch", "--force", "--", trunk, remote)
 	}
 	return run("git", "-C", wt, "merge", "--ff-only", remote)
+}
+
+// fetchStackOrigin fetches only trunk and stacked branches, then drops
+// remote-tracking refs for stacked branches that no longer exist on origin.
+// A full `git fetch` / `git remote prune origin` would walk every remote
+// branch, which is far more than sync needs.
+func fetchStackOrigin() error {
+	names := stackFetchNames()
+	if len(names) == 0 {
+		return nil
+	}
+	args := append([]string{"ls-remote", "--heads", "origin"}, names...)
+	out, err := capture("git", args...)
+	if err != nil {
+		return err
+	}
+	live := map[string]bool{}
+	var fetch []string
+	for _, name := range parseLsRemoteHeads(out) {
+		if live[name] {
+			continue
+		}
+		live[name] = true
+		fetch = append(fetch, name)
+	}
+	if len(fetch) > 0 {
+		if err := run("git", append([]string{"fetch", "origin"}, fetch...)...); err != nil {
+			return err
+		}
+	}
+	for _, name := range names {
+		if live[name] {
+			continue
+		}
+		_ = run2("git", "update-ref", "-d", "refs/remotes/origin/"+name)
+	}
+	return nil
+}
+
+func stackFetchNames() []string {
+	seen := map[string]bool{}
+	var names []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	add(fallbackTrunk(trunkNames()))
+	if st, err := loadForestState(); err == nil {
+		for _, s := range st.Stacks {
+			add(s.Trunk.Branch)
+			for _, b := range s.Branches {
+				add(b.Branch)
+			}
+		}
+	}
+	return names
+}
+
+func parseLsRemoteHeads(out string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		_, ref, ok := strings.Cut(line, "\t")
+		if !ok {
+			_, ref, ok = strings.Cut(line, " ")
+		}
+		if !ok {
+			continue
+		}
+		name, ok := strings.CutPrefix(strings.TrimSpace(ref), "refs/heads/")
+		if ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func worktreePathForBranch(name string) (string, error) {
@@ -315,16 +417,34 @@ func gitStackDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(filepath.Join(gitDir, "gh-stack")); err == nil {
+	if _, err := os.Stat(filepath.Join(gitDir, ghStackCompat.StateFileName)); err == nil {
 		return gitDir, nil
 	}
 	return capture("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
 }
 
-// gitStackFiles is every gh-stack path that might hold local stacks: this
+type stackLocation struct {
+	GitDir       string
+	WorktreePath string
+	StackFile    string
+}
+
+func gitStackFiles() ([]string, error) {
+	locs, err := listStackLocations()
+	if err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(locs))
+	for _, loc := range locs {
+		files = append(files, loc.StackFile)
+	}
+	return files, nil
+}
+
+// listStackLocations is every git-dir that might hold a gh-stack file: this
 // checkout, the shared repository, and each linked worktree. gh stack writes
 // per git-dir, so a worktree only sees its own stacks unless we union them.
-func gitStackFiles() ([]string, error) {
+func listStackLocations() ([]stackLocation, error) {
 	gitDir, err := capture("git", "rev-parse", "--path-format=absolute", "--git-dir")
 	if err != nil {
 		return nil, err
@@ -333,14 +453,19 @@ func gitStackFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	wtByGitDir := worktreePathByGitDir()
 	seen := map[string]bool{}
-	var files []string
+	var locs []stackLocation
 	add := func(dir string) {
 		if dir == "" || seen[dir] {
 			return
 		}
 		seen[dir] = true
-		files = append(files, filepath.Join(dir, "gh-stack"))
+		locs = append(locs, stackLocation{
+			GitDir:       dir,
+			WorktreePath: wtByGitDir[dir],
+			StackFile:    filepath.Join(dir, ghStackCompat.StateFileName),
+		})
 	}
 	add(gitDir)
 	add(common)
@@ -352,11 +477,70 @@ func gitStackFiles() ([]string, error) {
 			}
 		}
 	}
-	return files, nil
+	return locs, nil
+}
+
+func worktreePathByGitDir() map[string]string {
+	out, err := capture("git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	m := map[string]string{}
+	for _, path := range parseWorktreePaths(out) {
+		dir, err := worktreeGitDir(path)
+		if err != nil {
+			continue
+		}
+		m[dir] = path
+	}
+	return m
+}
+
+func worktreeGitDir(path string) (string, error) {
+	dotGit := filepath.Join(path, ".git")
+	info, err := os.Stat(dotGit)
+	if err == nil && info.IsDir() {
+		return filepath.Abs(dotGit)
+	}
+	if err == nil {
+		data, readErr := os.ReadFile(dotGit)
+		if readErr == nil {
+			line := strings.TrimSpace(string(data))
+			if dir, ok := strings.CutPrefix(line, "gitdir:"); ok {
+				dir = strings.TrimSpace(dir)
+				if !filepath.IsAbs(dir) {
+					dir = filepath.Join(path, dir)
+				}
+				return filepath.Abs(filepath.Clean(dir))
+			}
+		}
+	}
+	return capture("git", "-C", path, "rev-parse", "--path-format=absolute", "--git-dir")
+}
+
+func parseWorktreePaths(out string) []string {
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			paths = append(paths, strings.TrimPrefix(line, "worktree "))
+		}
+	}
+	return paths
 }
 
 func isLocalBranch(name string) bool {
 	return run2("git", "show-ref", "--verify", "--quiet", "refs/heads/"+name) == nil
+}
+
+func isAncestor(parent, child string) bool {
+	if parent == "" || child == "" {
+		return false
+	}
+	return run2("git", "merge-base", "--is-ancestor", parent, child) == nil
+}
+
+func branchHead(name string) (string, error) {
+	return capture("git", "rev-parse", "--verify", "--quiet", name)
 }
 
 // hasStagedChanges reports whether the index differs from HEAD.

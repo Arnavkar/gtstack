@@ -32,7 +32,8 @@ var commands = []command{
 	{[]string{"ss"}, "gh stack submit --auto (whole stack)", func(a []string) error {
 		return cmdSubmit(append([]string{"--stack"}, a...))
 	}},
-	{[]string{"sync"}, "gh stack sync", cmdSync},
+	{[]string{"sync"}, "fetch + restack (no push)", cmdSync},
+	{[]string{"doctor"}, "diagnose local stacks vs Git and GitHub", cmdDoctor},
 	{[]string{"restack"}, "gh stack rebase", cmdRestack},
 	{[]string{"continue"}, "gh stack rebase|modify --continue", cmdContinue},
 	{[]string{"abort"}, "gh stack rebase|modify --abort", cmdAbort},
@@ -45,14 +46,20 @@ var commands = []command{
 	{[]string{"ll"}, "git log --graph", func(a []string) error {
 		return cmdLog(append([]string{"long"}, a...))
 	}},
-	{[]string{"up"}, "gh stack up", passthrough("up")},
-	{[]string{"down"}, "gh stack down", passthrough("down")},
-	{[]string{"top"}, "gh stack top", passthrough("top")},
-	{[]string{"bottom"}, "gh stack bottom", passthrough("bottom")},
+	{[]string{"up", "u"}, "gh stack up", passthrough("up")},
+	{[]string{"down", "d"}, "gh stack down", passthrough("down")},
+	{[]string{"top", "t"}, "gh stack top", passthrough("top")},
+	{[]string{"bottom", "b"}, "gh stack bottom", passthrough("bottom")},
 	{[]string{"trunk"}, "gh stack trunk", passthrough("trunk")},
 	{[]string{"merge"}, "gh stack merge", passthrough("merge")},
 	{[]string{"switch"}, "gh stack switch", passthrough("switch")},
 	{[]string{"pr"}, "gh pr view --web", cmdPR},
+	{[]string{"add"}, "git add", gitPass("add")},
+	{[]string{"cherry-pick"}, "git cherry-pick", gitPass("cherry-pick")},
+	{[]string{"rebase"}, "git rebase", gitPass("rebase")},
+	{[]string{"reset"}, "git reset", gitPass("reset")},
+	{[]string{"restore"}, "git restore", gitPass("restore")},
+	{[]string{"track", "tr"}, "gh stack init", cmdTrack},
 	{[]string{"init"}, "(explains the gh stack model)", cmdInit},
 }
 
@@ -72,7 +79,6 @@ var unsupported = map[string]string{
 	"undo":      "gh stack keeps no undo journal. Use git reflog.",
 	"freeze":    "gh stack has no freeze.",
 	"unfreeze":  "gh stack has no freeze.",
-	"track":     "Use `gh stack init <branches...>` to adopt existing branches into a stack.",
 	"untrack":   "gh stack has no per-branch untrack. `gh stack unstack --local` drops the whole stack from local tracking.",
 	"unlink":    "gh stack has no per-branch unlink. `gh stack unstack --local` drops the whole stack from local tracking.",
 	"info":      "Use `gh stack view --json`.",
@@ -124,6 +130,13 @@ func main() {
 func exit(err error) {
 	if err == nil {
 		return
+	}
+	var xe *exitError
+	if errors.As(err, &xe) {
+		if xe.Error() != "" {
+			fmt.Fprintln(os.Stderr, "gt: "+xe.Error())
+		}
+		os.Exit(xe.code)
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {

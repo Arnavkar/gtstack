@@ -7,42 +7,45 @@ import (
 	"path/filepath"
 )
 
-// schemaVersion is the `.git/gh-stack` layout this wrapper understands.
-// gh stack writes the version into the file, so a bump means our reading of
-// the state is no longer trustworthy and we must stop rather than guess.
-const schemaVersion = 1
+// tracked* types match github/gh-stack v0.1.0 schema v1
+// (internal/stack/schema.json). gt does not own this format.
+
+type pullRequestRef struct {
+	Number int    `json:"number"`
+	ID     string `json:"id,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Merged bool   `json:"merged,omitempty"`
+}
+
+type trackedBranch struct {
+	Branch      string          `json:"branch"`
+	Head        string          `json:"head,omitempty"`
+	Base        string          `json:"base,omitempty"`
+	PullRequest *pullRequestRef `json:"pullRequest,omitempty"`
+}
 
 type trackedStack struct {
-	Trunk struct {
-		Branch string `json:"branch"`
-	} `json:"trunk"`
-	Branches []struct {
-		Branch string `json:"branch"`
-	} `json:"branches"`
+	ID       string          `json:"id,omitempty"`
+	Number   int             `json:"number,omitempty"`
+	Trunk    trackedBranch   `json:"trunk"`
+	Branches []trackedBranch `json:"branches"`
 }
 
 type stackState struct {
 	SchemaVersion int            `json:"schemaVersion"`
+	Repository    string         `json:"repository,omitempty"`
 	Stacks        []trackedStack `json:"stacks"`
 }
 
-func loadState() (*stackState, error) {
-	dir, err := gitStackDir()
-	if err != nil {
-		return nil, fmt.Errorf("not a git repository")
-	}
-	st, err := readStackFile(filepath.Join(dir, "gh-stack"))
-	if os.IsNotExist(err) {
-		// No file means either no stack has been created here yet, or the
-		// extension is missing. Reading it as "no stacks" would make gt report
-		// every branch as untracked, so rule the second case out first. This
-		// only costs a process before the repo's first stack exists.
-		if _, ierr := ensureExtension(); ierr != nil {
-			return nil, ierr
-		}
-		return &stackState{SchemaVersion: schemaVersion}, nil
-	}
-	return st, err
+type schemaError struct {
+	got, want int
+	path      string
+}
+
+func (e *schemaError) Error() string {
+	return fmt.Sprintf(
+		"gh stack state is schema v%d but this gt understands v%d; upgrade gt or use gh stack directly",
+		e.got, e.want)
 }
 
 func readStackFile(path string) (*stackState, error) {
@@ -54,41 +57,22 @@ func readStackFile(path string) (*stackState, error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return nil, fmt.Errorf("reading gh stack state: %w", err)
 	}
-	if st.SchemaVersion != schemaVersion {
-		return nil, fmt.Errorf(
-			"gh stack state is schema v%d but this gt understands v%d; upgrade gt or use gh stack directly",
-			st.SchemaVersion, schemaVersion)
+	if !ghStackCompat.SupportsSchema(st.SchemaVersion) {
+		return &st, &schemaError{got: st.SchemaVersion, want: ghStackCompat.PrimarySchema(), path: path}
 	}
 	return &st, nil
 }
 
-// loadForestState unions stacks from this checkout and every linked worktree
-// so `gt checkout` can draw the whole local forest, not just the current
-// worktree's gh-stack file.
-func loadForestState() (*stackState, error) {
-	files, err := gitStackFiles()
+func writeStackFile(path string, st *stackState) error {
+	if st.Stacks == nil {
+		st.Stacks = []trackedStack{}
+	}
+	st.SchemaVersion = ghStackCompat.PrimarySchema()
+	out, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("not a git repository")
+		return err
 	}
-	out := &stackState{SchemaVersion: schemaVersion}
-	found := false
-	for _, path := range files {
-		st, err := readStackFile(path)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		found = true
-		mergeStacks(out, st)
-	}
-	if !found {
-		if _, ierr := ensureExtension(); ierr != nil {
-			return nil, ierr
-		}
-	}
-	return out, nil
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 func mergeStacks(dst, src *stackState) {
@@ -154,7 +138,7 @@ func locate(st *stackState, branch string) position {
 func errForked(branch string) error {
 	return fmt.Errorf(
 		"branch %q belongs to more than one stack; gt only supports linear stacks.\n"+
-			"    Run the gh stack command directly and pick a stack interactively.", branch)
+			"    Run `gt doctor` to see the definitions, or use gh stack directly.", branch)
 }
 
 // pausedOperation reports which gh stack operation, if any, is halted waiting

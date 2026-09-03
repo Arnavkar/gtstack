@@ -173,8 +173,49 @@ func TestModifyOutsideAStack(t *testing.T) {
 	f := newFixture(t)
 	f.write("loose.txt", "loose\n")
 	r := f.gtFails("modify", "-a", "-m", "Not in a stack")
+	if !strings.Contains(r.stderr, "not part of a stack") || !strings.Contains(r.stderr, "gt create") {
+		t.Errorf("unexpected error:\n%s", r.output())
+	}
+}
+
+func TestModifyUntrackedBranchHintsInit(t *testing.T) {
+	f := newFixture(t)
+	f.git("checkout", "-b", "scratch")
+	f.write("scratch.txt", "scratch\n")
+	r := f.gtFails("modify", "-a", "-m", "Not in a stack")
 	if !strings.Contains(r.stderr, "not part of a stack") {
 		t.Errorf("unexpected error:\n%s", r.output())
+	}
+	if !strings.Contains(r.stderr, "`gt track`") {
+		t.Errorf("did not point at gt track:\n%s", r.output())
+	}
+	if strings.Contains(r.stderr, "start one with `gt create`") {
+		t.Errorf("told them to create a new branch:\n%s", r.output())
+	}
+}
+
+func TestTrackAdoptsCurrentBranch(t *testing.T) {
+	f := newFixture(t)
+	f.git("checkout", "-b", "scratch")
+	r := f.gt("track")
+	if !r.announced("gh stack init --base main scratch") {
+		t.Errorf("gt track did not run gh stack init:\n%s", r.output())
+	}
+	if got := f.tracked(); len(got) != 1 || got[0] != "scratch" {
+		t.Errorf("tracked stack is %q, want [scratch]", got)
+	}
+
+	r = f.gtFails("track")
+	if !strings.Contains(r.stderr, "already in a stack") {
+		t.Errorf("second track: %s", r.output())
+	}
+}
+
+func TestTrackOnTrunkRefuses(t *testing.T) {
+	f := newFixture(t)
+	r := f.gtFails("track")
+	if !strings.Contains(r.stderr, "gt create") {
+		t.Errorf("track on trunk: %s", r.output())
 	}
 }
 
@@ -188,10 +229,10 @@ func TestNavigation(t *testing.T) {
 		command, native, want string
 	}{
 		{"down", "gh stack down", "layer-two"},
-		{"down", "gh stack down", "layer-one"},
-		{"up", "gh stack up", "layer-two"},
-		{"top", "gh stack top", "layer-three"},
-		{"bottom", "gh stack bottom", "layer-one"},
+		{"d", "gh stack down", "layer-one"},
+		{"u", "gh stack up", "layer-two"},
+		{"t", "gh stack top", "layer-three"},
+		{"b", "gh stack bottom", "layer-one"},
 		{"trunk", "gh stack trunk", "main"},
 	}
 	for _, step := range steps {
@@ -202,6 +243,64 @@ func TestNavigation(t *testing.T) {
 		if got := f.branch(); got != step.want {
 			t.Fatalf("gt %s landed on %q, want %q", step.command, got, step.want)
 		}
+	}
+}
+
+func TestGitPassthrough(t *testing.T) {
+	f := newFixture(t)
+	f.layer("layer-one", "Add layer one")
+
+	r := f.gt("rebase", "HEAD")
+	if !r.announced("git rebase HEAD") {
+		t.Errorf("gt rebase did not run git rebase\n%s", r.output())
+	}
+
+	f.write("staged.txt", "staged\n")
+	r = f.gt("add", "-A")
+	if !r.announced("git add -A") {
+		t.Errorf("gt add did not run git add\n%s", r.output())
+	}
+	if got := f.git("diff", "--cached", "--name-only"); got != "staged.txt" {
+		t.Errorf("staged files are %q, want staged.txt", got)
+	}
+
+	r = f.gt("restore", "--staged", "staged.txt")
+	if !r.announced("git restore --staged staged.txt") {
+		t.Errorf("gt restore did not run git restore\n%s", r.output())
+	}
+	if got := f.git("diff", "--cached", "--name-only"); got != "" {
+		t.Errorf("index still has %q after restore --staged", got)
+	}
+
+	f.git("add", "-A")
+	f.git("commit", "--quiet", "-m", "a commit to reset")
+	before := f.git("rev-parse", "HEAD~1")
+	r = f.gt("reset", "--soft", "HEAD~1")
+	if !r.announced("git reset --soft 'HEAD~1'") {
+		t.Errorf("gt reset did not run git reset\n%s", r.output())
+	}
+	if got := f.git("rev-parse", "HEAD"); got != before {
+		t.Errorf("HEAD is %s after reset, want %s", got, before)
+	}
+
+	r = f.run(gtBin, "cherry-pick", "not-a-commit")
+	if !r.announced("git cherry-pick not-a-commit") {
+		t.Errorf("gt cherry-pick did not run git cherry-pick\n%s", r.output())
+	}
+	if strings.Contains(r.stderr, "unknown command") {
+		t.Errorf("gt cherry-pick was not dispatched\n%s", r.output())
+	}
+}
+
+func TestSubmitUpdateOnlyIsAccepted(t *testing.T) {
+	f := newFixture(t)
+	r := f.run(gtBin, "submit", "--help")
+	if r.code != 0 {
+		t.Fatalf("gt submit --help exited %d\n%s", r.code, r.output())
+	}
+	help := r.output()
+	if !strings.Contains(help, "update-only") || !strings.Contains(help, "-u") {
+		t.Errorf("gt submit --help is missing --update-only / -u\n%s", help)
 	}
 }
 
@@ -282,60 +381,65 @@ func TestRestackDirections(t *testing.T) {
 	}
 }
 
-// TestSyncPushesTheStack exercises the parts of `gh stack sync` that do not
-// need the API: fetch, cascade rebase, and push every branch.
-func TestSyncPushesTheStack(t *testing.T) {
+// TestSyncRestacksWithoutPushing: Graphite's sync pulls and restacks locally.
+// Pushing is submit. gh stack sync always pushes, so gt uses rebase instead.
+func TestSyncRestacksWithoutPushing(t *testing.T) {
 	f := newFixture(t)
 	f.layer("layer-one", "Add layer one")
 	f.layer("layer-two", "Add layer two")
 
-	if r := f.gt("sync"); !r.announced("gh stack sync") {
-		t.Errorf("gt sync did not run `gh stack sync`\n%s", r.output())
+	r := f.gt("sync")
+	if !r.announced("gh stack rebase") {
+		t.Errorf("gt sync did not restack locally\n%s", r.output())
 	}
-	if r := f.gt("sync", "-d"); !r.announced("gh stack sync --prune") {
-		t.Errorf("gt sync -d did not pass --prune\n%s", r.output())
+	if r.announced("gh stack sync") {
+		t.Errorf("gt sync must not run `gh stack sync` (it pushes)\n%s", r.output())
 	}
 
 	remote := f.git("ls-remote", "--heads", "origin")
 	for _, branch := range []string{"layer-one", "layer-two"} {
-		if !strings.Contains(remote, "refs/heads/"+branch) {
-			t.Errorf("sync did not push %s\n%s", branch, remote)
+		if strings.Contains(remote, "refs/heads/"+branch) {
+			t.Errorf("sync pushed %s; only submit should push\n%s", branch, remote)
 		}
 	}
 }
 
-// TestSyncDeletesGoneUpstream covers the local cleanup gt does after
-// `gh stack sync`: a branch whose remote-tracking ref was deleted is removed
-// with -d, and only reported (not deleted) without a terminal.
+// TestSyncDeletesGoneUpstream: -d may delete a stale *stack* branch, but must
+// never delete an unrelated Git branch whose upstream disappeared.
 func TestSyncDeletesGoneUpstream(t *testing.T) {
 	f := newFixture(t)
 	f.layer("layer-one", "Add layer one")
+	f.git("push", "--quiet", "-u", "origin", "layer-one")
 
 	f.git("checkout", "--quiet", "-b", "scratch")
 	f.write("scratch.txt", "scratch\n")
 	f.git("add", "-A")
 	f.git("commit", "--quiet", "-m", "scratch")
 	f.git("push", "--quiet", "-u", "origin", "scratch")
-	f.git("checkout", "--quiet", "layer-one")
+	f.git("checkout", "--quiet", "main")
 	f.git("push", "origin", "--delete", "scratch")
+	f.git("push", "origin", "--delete", "layer-one")
 
 	listed := f.gt("sync")
-	if !strings.Contains(listed.stderr, "scratch") || !strings.Contains(listed.stderr, "gone") {
-		t.Errorf("gt sync did not report the gone upstream:\n%s", listed.output())
+	if strings.Contains(listed.stderr, "scratch") {
+		t.Errorf("gt sync offered to prune unrelated branch scratch:\n%s", listed.output())
 	}
-	if !strings.Contains(listed.stderr, "pass -d") {
-		t.Errorf("gt sync did not explain how to delete without a terminal:\n%s", listed.output())
+	if !strings.Contains(listed.stderr, "layer-one") {
+		t.Errorf("gt sync did not report the stale stack branch:\n%s", listed.output())
 	}
 	if f.git("branch", "--list", "scratch") == "" {
 		t.Error("gt sync deleted scratch without -d or a prompt")
 	}
 
 	deleted := f.gt("sync", "-d")
-	if !deleted.announced("git branch -D scratch") {
-		t.Errorf("gt sync -d did not delete scratch:\n%s", deleted.output())
+	if strings.Contains(deleted.stderr, "git branch -D scratch") {
+		t.Errorf("gt sync -d deleted unrelated scratch:\n%s", deleted.output())
 	}
-	if f.git("branch", "--list", "scratch") != "" {
-		t.Error("scratch still exists after gt sync -d")
+	if f.git("branch", "--list", "scratch") == "" {
+		t.Fatal("gt sync -d deleted unrelated branch scratch")
+	}
+	if f.git("branch", "--list", "layer-one") != "" {
+		t.Fatal("stale stack branch layer-one still exists after gt sync -d")
 	}
 }
 
@@ -491,7 +595,7 @@ func TestContinueWithNothingPaused(t *testing.T) {
 // stopping.
 func TestUnsupportedCommands(t *testing.T) {
 	f := newFixture(t)
-	for _, name := range []string{"fold", "reorder", "split", "absorb", "track", "undo", "config"} {
+	for _, name := range []string{"fold", "reorder", "split", "absorb", "undo", "config"} {
 		r := f.run(gtBin, name)
 		if r.code != 2 {
 			t.Errorf("gt %s exited %d, want 2\n%s", name, r.code, r.output())

@@ -25,6 +25,22 @@ func TestSubmitArgs(t *testing.T) {
 	}
 }
 
+func TestFailedPushBranch(t *testing.T) {
+	stderr := "✗ failed to push chore/extract-shared-utilities: failed to run git: error: failed to push some refs to 'github.com:holly-revamp/holly.git'\n"
+	if got := failedPushBranch(stderr); got != "chore/extract-shared-utilities" {
+		t.Errorf("failedPushBranch = %q", got)
+	}
+	if !swallowedPushError(stderr) {
+		t.Error("expected swallowedPushError")
+	}
+	if got := failedPushBranch("error: failed to push some refs to 'github.com:org/repo.git'\n"); got != "" {
+		t.Errorf("generic git line should not parse a branch, got %q", got)
+	}
+	if swallowedPushError("current branch is not part of a stack") {
+		t.Error("unrelated submit error must not look swallowed")
+	}
+}
+
 func TestIgnorableStackSyncError(t *testing.T) {
 	if !ignorableStackSyncError(`fatal: cannot force update the branch 'main' used by worktree at '/repo'`) {
 		t.Error("worktree force-update should be ignorable")

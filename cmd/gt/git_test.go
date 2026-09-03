@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestShellQuote(t *testing.T) {
 	tests := []struct {
@@ -78,5 +81,17 @@ func TestParseWorktreeBranchPaths(t *testing.T) {
 	}
 	if _, ok := got[""]; ok {
 		t.Fatal("detached HEAD should not map an empty branch")
+	}
+}
+
+func TestParseLsRemoteHeads(t *testing.T) {
+	out := "abc123\trefs/heads/main\ndef456\trefs/heads/chore/extract-shared-utilities\n"
+	got := parseLsRemoteHeads(out)
+	want := []string{"main", "chore/extract-shared-utilities"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("parseLsRemoteHeads = %#v, want %#v", got, want)
+	}
+	if got := parseLsRemoteHeads(""); len(got) != 0 {
+		t.Fatalf("empty = %#v", got)
 	}
 }

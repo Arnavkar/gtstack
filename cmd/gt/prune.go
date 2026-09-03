@@ -8,14 +8,18 @@ import (
 )
 
 type localBranch struct {
-	name     string
-	upstream string
-	gone     bool
+	name      string
+	upstream  string
+	gone      bool
+	local     bool
+	trackedPR int
+	mergedPR  int
 }
 
 type pullRequest struct {
 	Number      int    `json:"number"`
 	State       string `json:"state"`
+	BaseRefName string `json:"baseRefName"`
 	HeadRefName string `json:"headRefName"`
 }
 
@@ -25,35 +29,26 @@ type staleBranch struct {
 }
 
 // pruneStaleBranches offers to delete local branches whose upstream is gone
-// or whose pull request has been merged or closed. Sync has already fetched;
-// this only prunes stale remote-tracking refs so "gone" is visible.
+// or whose pull request has been merged or closed. Sync has already fetched
+// stacked remotes and dropped missing origin refs, so "gone" is visible.
 func pruneStaleBranches(deleteAll bool) error {
-	if err := pruneRemoteTracking(); err != nil {
-		return err
-	}
-	branches, err := listLocalBranches()
+	branches, err := listStaleCandidates()
 	if err != nil {
 		return err
 	}
-	prs, err := listClosedPullRequests()
+	prs, err := listPullRequests()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gt: could not list pull requests (%v); checking deleted remotes only\n", err)
 		prs = nil
 	}
-	stale := staleLocals(branches, prs, trunkNames())
+	stale := staleLocalsWithPRs(branches, prs, trunkNames(), err == nil)
 	if len(stale) == 0 {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "gt: %d local branch(es) have a deleted upstream or a merged/closed PR:\n", len(stale))
-	for _, s := range stale {
-		fmt.Fprintf(os.Stderr, "    %s  %s\n", s.name, s.reason)
-	}
-
-	interactive := isTerminal(os.Stdin)
-	if !deleteAll && !interactive {
-		fmt.Fprintln(os.Stderr, "gt: rerun `gt sync` in a terminal to keep or delete each branch, or pass -d to delete them all.")
-		return nil
+	chosen, err := chooseStaleToDelete(stale, deleteAll)
+	if err != nil {
+		return err
 	}
 
 	current, err := currentBranch()
@@ -61,32 +56,68 @@ func pruneStaleBranches(deleteAll bool) error {
 		current = ""
 	}
 	fallback := fallbackTrunk(trunkNames())
-	for _, s := range stale {
-		if !deleteAll && !confirm(fmt.Sprintf("gt: delete local branch %q?", s.name), false) {
-			continue
+	dropped := map[string]bool{}
+	for _, s := range chosen {
+		if isLocalBranch(s.name) {
+			if err := deleteLocalBranch(s.name, current, fallback); err != nil {
+				fmt.Fprintf(os.Stderr, "gt: could not delete %s: %v\n", s.name, err)
+				continue
+			}
+			if s.name == current {
+				current = fallback
+			}
 		}
-		if err := deleteLocalBranch(s.name, current, fallback); err != nil {
-			fmt.Fprintf(os.Stderr, "gt: could not delete %s: %v\n", s.name, err)
-			continue
-		}
-		if s.name == current {
-			current = fallback
-		}
+		dropped[s.name] = true
 	}
-	return nil
+	return dropBranchesFromStackFiles(dropped)
 }
 
-func pruneRemoteTracking() error {
-	out, err := capture("git", "remote")
-	if err != nil || out == "" {
-		return nil
+func chooseStaleToDelete(stale []staleBranch, deleteAll bool) ([]staleBranch, error) {
+	fmt.Fprintf(os.Stderr, "gt: %d stale stack branch(es):\n", len(stale))
+	for _, s := range stale {
+		fmt.Fprintf(os.Stderr, "    %s  %s\n", s.name, s.reason)
 	}
-	for _, remote := range strings.Fields(out) {
-		if err := run("git", "remote", "prune", remote); err != nil {
-			return err
+	if deleteAll {
+		return stale, nil
+	}
+	interactive := isTerminal(os.Stdin) && isTerminal(os.Stderr)
+	if !interactive {
+		fmt.Fprintln(os.Stderr, "gt: rerun `gt sync` in a terminal to keep or delete each branch, or pass -d to delete them all.")
+		return nil, nil
+	}
+	if len(stale) == 1 {
+		if !confirm(fmt.Sprintf("gt: delete local branch %q?", stale[0].name), false) {
+			return nil, nil
+		}
+		return stale, nil
+	}
+	chosen, err := pickMulti(stalePickRows(stale), deletePrompt)
+	if err != nil {
+		return nil, nil
+	}
+	byName := map[string]staleBranch{}
+	for _, s := range stale {
+		byName[s.name] = s
+	}
+	var out []staleBranch
+	for _, r := range chosen {
+		if s, ok := byName[r.branch]; ok {
+			out = append(out, s)
 		}
 	}
-	return nil
+	return out, nil
+}
+
+func stalePickRows(stale []staleBranch) []pickRow {
+	rows := make([]pickRow, 0, len(stale))
+	for _, s := range stale {
+		rows = append(rows, pickRow{
+			branch: s.name,
+			detail: s.reason,
+			text:   s.name + "  " + s.reason,
+		})
+	}
+	return rows
 }
 
 func listLocalBranches() ([]localBranch, error) {
@@ -97,6 +128,44 @@ func listLocalBranches() ([]localBranch, error) {
 		return nil, err
 	}
 	return parseLocalBranches(out), nil
+}
+
+func listStaleCandidates() ([]localBranch, error) {
+	locals, err := listLocalBranches()
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]localBranch{}
+	for _, b := range locals {
+		byName[b.name] = b
+	}
+	st, err := loadForestState()
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, s := range st.Stacks {
+		for _, br := range s.Branches {
+			if br.Branch == "" {
+				continue
+			}
+			known[br.Branch] = true
+			cur := byName[br.Branch]
+			cur.name = br.Branch
+			if br.PullRequest != nil && br.PullRequest.Number != 0 {
+				cur.trackedPR = br.PullRequest.Number
+				if br.PullRequest.Merged {
+					cur.mergedPR = br.PullRequest.Number
+				}
+			}
+			byName[br.Branch] = cur
+		}
+	}
+	out := make([]localBranch, 0, len(known))
+	for name := range known {
+		out = append(out, byName[name])
+	}
+	return out, nil
 }
 
 func parseLocalBranches(out string) []localBranch {
@@ -111,14 +180,15 @@ func parseLocalBranches(out string) []localBranch {
 			name:     name,
 			upstream: upstream,
 			gone:     strings.Contains(track, "gone"),
+			local:    true,
 		})
 	}
 	return branches
 }
 
-func listClosedPullRequests() ([]pullRequest, error) {
-	out, err := capture("gh", "pr", "list", "--state", "closed", "--limit", "1000",
-		"--json", "number,state,headRefName")
+func listPullRequests() ([]pullRequest, error) {
+	out, err := capture("gh", "pr", "list", "--state", "all", "--limit", "1000",
+		"--json", "number,state,baseRefName,headRefName")
 	if err != nil {
 		return nil, err
 	}
@@ -130,30 +200,74 @@ func listClosedPullRequests() ([]pullRequest, error) {
 }
 
 func staleLocals(branches []localBranch, prs []pullRequest, trunks map[string]bool) []staleBranch {
-	prByHead := map[string]pullRequest{}
+	return staleLocalsWithPRs(branches, prs, trunks, true)
+}
+
+func staleLocalsWithPRs(branches []localBranch, prs []pullRequest, trunks map[string]bool, prsAvailable bool) []staleBranch {
+	prByNumber := map[int]pullRequest{}
+	prsByHead := map[string][]pullRequest{}
 	for _, pr := range prs {
-		state := strings.ToUpper(pr.State)
-		if state != "MERGED" && state != "CLOSED" {
-			continue
-		}
-		pr.State = state
-		prByHead[pr.HeadRefName] = pr
+		pr.State = strings.ToUpper(pr.State)
+		prByNumber[pr.Number] = pr
+		prsByHead[pr.HeadRefName] = append(prsByHead[pr.HeadRefName], pr)
 	}
 	var out []staleBranch
 	for _, b := range branches {
-		if trunks[b.name] || b.upstream == "" {
+		if trunks[b.name] {
 			continue
 		}
 		reason := ""
-		if pr, ok := prByHead[b.name]; ok {
-			reason = prReason(pr)
-		} else if pr, ok := prByHead[upstreamBranch(b.upstream)]; ok {
-			reason = prReason(pr)
+		if prsAvailable {
+			heads := []string{b.name}
+			if b.upstream != "" {
+				heads = append(heads, upstreamBranch(b.upstream))
+			}
+			open := false
+			for _, head := range heads {
+				for _, pr := range prsByHead[head] {
+					if pr.State == "OPEN" {
+						open = true
+					}
+				}
+			}
+			if open {
+				continue
+			}
+			if b.trackedPR != 0 {
+				if pr, ok := prByNumber[b.trackedPR]; ok {
+					if pr.State == "OPEN" {
+						continue
+					}
+					if pr.State == "MERGED" || pr.State == "CLOSED" {
+						reason = prReason(pr)
+					}
+				} else if b.mergedPR == b.trackedPR {
+					reason = fmt.Sprintf("PR #%d merged", b.mergedPR)
+				}
+			} else {
+				for _, head := range heads {
+					for _, pr := range prsByHead[head] {
+						if pr.State == "MERGED" || pr.State == "CLOSED" {
+							reason = prReason(pr)
+							break
+						}
+					}
+					if reason != "" {
+						break
+					}
+				}
+				if reason == "" && b.mergedPR != 0 {
+					reason = fmt.Sprintf("PR #%d merged", b.mergedPR)
+				}
+			}
 		}
 		switch {
-		case b.gone && reason == "":
+		case reason != "":
+		case b.gone && b.upstream != "":
 			reason = b.upstream + " is gone"
-		case reason == "" && !b.gone:
+		case !b.local:
+			reason = "not a local branch"
+		default:
 			continue
 		}
 		out = append(out, staleBranch{name: b.name, reason: reason})
@@ -216,4 +330,84 @@ func deleteLocalBranch(name, current, fallback string) error {
 		}
 	}
 	return run("git", "branch", "-D", name)
+}
+
+func dropBranchesFromStackFiles(names map[string]bool) error {
+	if len(names) == 0 {
+		return nil
+	}
+	files, err := gitStackFiles()
+	if err != nil {
+		return err
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		updated, changed, err := stripStackBranches(data, names)
+		if err != nil || !changed {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.WriteFile(path, updated, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stripStackBranches(data []byte, names map[string]bool) ([]byte, bool, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, false, err
+	}
+	stacks, ok := raw["stacks"].([]any)
+	if !ok {
+		return data, false, nil
+	}
+	changed := false
+	var kept []any
+	for _, s := range stacks {
+		sm, ok := s.(map[string]any)
+		if !ok {
+			kept = append(kept, s)
+			continue
+		}
+		branches, _ := sm["branches"].([]any)
+		var nb []any
+		for _, b := range branches {
+			bm, ok := b.(map[string]any)
+			if !ok {
+				nb = append(nb, b)
+				continue
+			}
+			name, _ := bm["branch"].(string)
+			if names[name] {
+				changed = true
+				continue
+			}
+			nb = append(nb, b)
+		}
+		if len(nb) == 0 {
+			changed = true
+			continue
+		}
+		sm["branches"] = nb
+		kept = append(kept, sm)
+	}
+	if !changed {
+		return data, false, nil
+	}
+	raw["stacks"] = kept
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
 }

@@ -46,13 +46,12 @@ func cmdCreate(args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := loadState()
+	pos, _, err := requireStackPosition(branch)
 	if err != nil {
 		return err
 	}
-	pos := locate(st, branch)
-	if pos.forked {
-		return errForked(branch)
+	if err := requireLocalStackMetadata(branch, pos); err != nil {
+		return err
 	}
 
 	if pos.inStack && !pos.atTop {
@@ -117,16 +116,15 @@ func cmdModify(args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := loadState()
+	pos, _, err := requireStackPosition(branch)
 	if err != nil {
 		return err
 	}
-	pos := locate(st, branch)
-	if pos.forked {
-		return errForked(branch)
+	if err := requireLocalStackMetadata(branch, pos); err != nil {
+		return err
 	}
 	if !pos.inStack {
-		return fmt.Errorf("branch %q is not part of a stack; start one with `gt create`", branch)
+		return errNotInStack(branch)
 	}
 
 	if err := stage(*all, *update, *patch); err != nil {
@@ -166,6 +164,17 @@ func cmdModify(args []string) error {
 	return run("gh", "stack", "rebase", "--upstack", "--no-trunk")
 }
 
+func errNotInStack(branch string) error {
+	if trunkNames()[branch] {
+		return fmt.Errorf("branch %q is not part of a stack; start one with `gt create`", branch)
+	}
+	return fmt.Errorf(
+		"branch %q is not part of a stack.\n"+
+			"    Adopt this existing branch with `gt track`.\n"+
+			"    `gt create` would start a new branch on top of this one.",
+		branch)
+}
+
 // cmdSubmit maps onto `gh stack submit`, which always covers the whole stack.
 //
 // gh stack opens its editor whenever it has a terminal, but Graphite's submit
@@ -182,6 +191,7 @@ func cmdSubmit(args []string) error {
 	noEdit := fs.BoolP("no-edit", "n", false, "skip the PR metadata editor (the default)")
 	edit := fs.BoolP("edit", "e", false, "open the gh stack submit editor")
 	stack := fs.Bool("stack", false, "submit the whole stack (always on with gh stack)")
+	updateOnly := fs.BoolP("update-only", "u", false, "only update existing PRs (gh stack still creates missing ones)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -196,10 +206,66 @@ func cmdSubmit(args []string) error {
 			"gt: note — gh stack submit covers the whole stack, not just the current branch and below.\n"+
 				"    Pass -e to pick branches in the editor.")
 	}
+	if *updateOnly {
+		fmt.Fprintln(os.Stderr,
+			"gt: note — gh stack submit creates PRs for branches that do not have them.\n"+
+				"    Pass -e and deselect those branches to update existing PRs only.")
+	}
 	if *draft && *edit {
 		fmt.Fprintln(os.Stderr, "gt: note — set draft with the CREATE AS toggle in the submit editor.")
 	}
-	return run("gh", submitArgs(*edit, *publish)...)
+	captured, err := runTee("gh", submitArgs(*edit, *publish)...)
+	if err != nil {
+		explainSwallowedPush(captured)
+	}
+	return err
+}
+
+// explainSwallowedPush re-runs a dry-run push when gh stack reports only
+// git's generic "failed to push some refs". That line hides pre-push hooks
+// and --force-with-lease details.
+func explainSwallowedPush(stderr string) {
+	if !swallowedPushError(stderr) {
+		return
+	}
+	branch := failedPushBranch(stderr)
+	if branch == "" {
+		if cur, err := currentBranch(); err == nil {
+			branch = cur
+		}
+	}
+	if branch == "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "trace:")
+	_ = run("git", "push", "--dry-run", "--force-with-lease", "origin", branch)
+}
+
+func swallowedPushError(stderr string) bool {
+	return strings.Contains(stderr, "failed to push some refs") ||
+		(strings.Contains(stderr, "failed to run git") && strings.Contains(stderr, "failed to push"))
+}
+
+func failedPushBranch(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "✗"))
+		if !strings.HasPrefix(line, "failed to push ") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "failed to push ")
+		if strings.HasPrefix(rest, "some refs") {
+			continue
+		}
+		name, _, ok := strings.Cut(rest, ":")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name != "" && !strings.ContainsAny(name, " \t") {
+			return name
+		}
+	}
+	return ""
 }
 
 // submitArgs builds the `gh stack submit` invocation. It is split out so the
@@ -217,27 +283,23 @@ func submitArgs(edit, publish bool) []string {
 
 func cmdSync(args []string) error {
 	fs := newFlags("sync")
-	deleteAll := fs.BoolP("delete-all", "d", false, "delete merged, closed, or remotely-deleted local branches without prompting")
+	deleteAll := fs.BoolP("delete-all", "d", false, "delete stale stack branches without prompting")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if err := fastForwardTrunk(); err != nil {
 		return err
 	}
-	gh := []string{"stack", "sync"}
-	if *deleteAll {
-		gh = append(gh, "--prune")
-	}
 	branch, err := currentBranch()
 	if err != nil {
 		return err
 	}
-	st, err := loadState()
+	pos, _, err := requireStackPosition(branch)
 	if err != nil {
 		return err
 	}
-	if locate(st, branch).inStack {
-		stderr, err := runRecording("gh", gh...)
+	if pos.inStack {
+		stderr, err := runRecording("gh", "stack", "rebase")
 		if err != nil && !ignorableStackSyncError(stderr) {
 			return err
 		}
@@ -320,7 +382,7 @@ func checkoutInteractive() error {
 		if err != nil {
 			return err
 		}
-		rows := ensureCurrent(stackForest(st, current), current)
+		rows := checkoutRows(st, current)
 		rows = append(rows, githubStacksRow())
 		chosen, err := pickBranch(rows)
 		if err != nil {
@@ -339,11 +401,18 @@ func checkoutInteractive() error {
 // then a PR, so those would land you on the wrong branch.
 func checkoutTarget(target string) error {
 	if isLocalBranch(target) {
-		st, err := loadState()
+		pos, _, err := requireStackPosition(target)
 		if err != nil {
 			return err
 		}
-		if !locate(st, target).inStack {
+		if !pos.inStack {
+			return run("git", "checkout", target)
+		}
+		cur, err := loadCurrentWorktreeState()
+		if err != nil {
+			return err
+		}
+		if !locate(cur, target).inStack {
 			return run("git", "checkout", target)
 		}
 	}
@@ -376,8 +445,60 @@ func cmdPR(args []string) error {
 	return run("gh", append([]string{"pr", "view", "--web"}, args...)...)
 }
 
+// cmdTrack adopts existing Git branches into a new stack. Graphite's
+// per-branch track becomes `gh stack init` of the listed branches (or the
+// current one). It does not create a new branch; that is `gt create`.
+func cmdTrack(args []string) error {
+	fs := newFlags("track [branches...]")
+	base := fs.StringP("base", "b", "", "trunk for the new stack")
+	parent := fs.StringP("parent", "p", "", "Graphite parent branch")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if *parent != "" {
+		return fmt.Errorf("gt track --parent has no gh stack equivalent; pass --base <trunk> and list branches bottom to top")
+	}
+	trunk := *base
+	if trunk == "" {
+		trunk = fallbackTrunk(trunkNames())
+	}
+	branches := fs.Args()
+	if len(branches) == 0 {
+		cur, err := currentBranch()
+		if err != nil {
+			return err
+		}
+		if trunkNames()[cur] {
+			return fmt.Errorf("on trunk %q; start a stacked branch with `gt create`, or pass names: `gt track a b`", cur)
+		}
+		pos, _, err := requireStackPosition(cur)
+		if err != nil {
+			return err
+		}
+		if pos.inStack {
+			return fmt.Errorf("branch %q is already in a stack", cur)
+		}
+		branches = []string{cur}
+	} else {
+		for _, name := range branches {
+			if trunkNames()[name] {
+				return fmt.Errorf("%q is a trunk; omit it and pass --base %s", name, name)
+			}
+			pos, _, err := requireStackPosition(name)
+			if err != nil {
+				return err
+			}
+			if pos.inStack {
+				return fmt.Errorf("branch %q is already in a stack", name)
+			}
+		}
+	}
+	gh := append([]string{"stack", "init", "--base", trunk}, branches...)
+	return run("gh", gh...)
+}
+
 func cmdInit(args []string) error {
 	return fmt.Errorf(
 		"gh stack has no repository-level init; a stack is created when you branch.\n" +
-			"    Run `gt create <name>` on your trunk to start one, or `gh stack init a b c` to adopt existing branches.")
+			"    Run `gt create <name>` on your trunk to start one, or `gt track` to adopt existing branches.")
 }
